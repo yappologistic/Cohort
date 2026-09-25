@@ -42,7 +42,7 @@
 !/assets/icons/*.svg
 !/assets/screenshots/
 /assets/screenshots/*
-!/assets/screenshots/*.png
+!/assets/screenshots/cohort-fans.png
 
 !/licenses/
 /licenses/*
@@ -50,6 +50,7 @@
 
 !/packaging/
 /packaging/*
+!/packaging/legion_laptop.conf
 !/packaging/arch/
 /packaging/arch/*
 !/packaging/arch/PKGBUILD
@@ -89,6 +90,39 @@ verify-out/
 .agents/
 .idea/
 .vscode/
+
+# Personal media, captures, archives and key material, wherever they land.
+# The allowlist above already keeps them out; these hold even if it is
+# widened by mistake. A new README image is added by name above.
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.heic
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.wav
+*.flac
+*.mp3
+*.zip
+*.tar
+*.tar.*
+*.zst
+*.7z
+*.pkg.tar.*
+*.ko
+*.gpg
+*.asc
+*.ovpn
+id_rsa*
+id_ed25519*
+*.kdbx
+.netrc
+.git-credentials
+hosts.yml
 
 # README is the only Markdown file in the public repository.
 *.[mM][dD]
