@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cohort
+Comment=Power, battery, fan and keyboard settings for Lenovo Legion laptops
+Exec=cohort
+Icon=io.github.yappologistic.Cohort
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=legion;lenovo;fan;battery;power;keyboard;rgb;conservation;
+StartupWMClass=io.github.yappologistic.Cohort

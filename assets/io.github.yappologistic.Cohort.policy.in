@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Who may run cohort-helper as root.
+
+  The helper changes the same kind of setting power-profiles-daemon already
+  lets the person at the machine change without a password: a power mode, how
+  the battery charges, the keyboard's lights, how the fans respond. It accepts
+  only the controls listed in src/controls.cpp and only values the driver
+  publishes as valid. So the person at the machine, in an active local
+  session, is allowed without a prompt; anyone else, including a remote
+  session, needs an administrator.
+
+  pkexec matches this action to the helper by its exact installed path.
+-->
+<policyconfig>
+  <vendor>Cohort</vendor>
+  <vendor_url>https://github.com/yappologistic/Cohort</vendor_url>
+  <action id="io.github.yappologistic.Cohort.change">
+    <description>Change laptop hardware settings</description>
+    <message>Authentication is required to change laptop hardware settings</message>
+    <icon_name>io.github.yappologistic.Cohort</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@COHORT_HELPER_PATH@</annotate>
+  </action>
+</policyconfig>

@@ -1,0 +1,37 @@
+# Maintainer: yappologistic <yappologistic@users.noreply.github.com>
+# Builds the latest commit. makepkg -si from this directory installs it.
+pkgname=cohort-git
+_pkgname=Cohort
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Power, battery, fan and keyboard settings for Lenovo Legion laptops"
+arch=('x86_64')
+url="https://github.com/yappologistic/Cohort"
+license=('GPL-3.0-or-later')
+depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'polkit')
+makedepends=('git' 'cmake' 'ninja')
+optdepends=('lenovolegionlinux-dkms: fan curves and extra switches through the legion_laptop module'
+            'power-profiles-daemon: keeps the desktop power menu in step with the power mode')
+provides=('cohort')
+conflicts=('cohort')
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  printf '%s.r%s.g%s' "$(grep -Po 'project\(Cohort VERSION \K[0-9.]+' CMakeLists.txt)" \
+    "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cmake -S "$_pkgname" -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib/cohort \
+    -DBUILD_TESTING=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

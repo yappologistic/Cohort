@@ -1,0 +1,582 @@
+#include "m3color.h"
+#include <QMutex>
+#include <QMutexLocker>
+#include <QtGlobal>
+#include <array>
+#include <cmath>
+#include <utility>
+
+namespace m3 {
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+double sanitizeDegrees(double degrees) {
+  degrees = std::fmod(degrees, 360.0);
+  return degrees < 0 ? degrees + 360.0 : degrees;
+}
+
+// sRGB transfer function, over components scaled to 0-100.
+double linearized(double component) {
+  const double v = component;
+  return 100.0 * (v <= 0.040449936 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4));
+}
+double delinearized(double component) {
+  const double v = qBound(0.0, component / 100.0, 1.0);
+  return v <= 0.0031308 ? v * 12.92 : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+}
+
+double labF(double t) {
+  constexpr double e = 216.0 / 24389.0;
+  return t > e ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+}
+double labInverseF(double ft) {
+  constexpr double e = 216.0 / 24389.0;
+  const double cubed = ft * ft * ft;
+  return cubed > e ? cubed : (116.0 * ft - 16.0) / (24389.0 / 27.0);
+}
+double yFromTone(double tone) { return 100.0 * labInverseF((tone + 16.0) / 116.0); }
+double toneFromY(double y) { return 116.0 * labF(y / 100.0) - 16.0; }
+
+QColor fromLinearRgb(double r, double g, double b) {
+  return QColor::fromRgbF(qBound(0.0, delinearized(r), 1.0), qBound(0.0, delinearized(g), 1.0),
+                          qBound(0.0, delinearized(b), 1.0));
+}
+
+// CAM16 viewing conditions, fixed to the ones Material measures colors under:
+// a D65 white point, an L* 50 background and an average surround.
+struct ViewingConditions {
+  double aw, nbb, ncb, c, nc, n, fl, flRoot, z;
+  double rgbD[3];
+};
+
+const ViewingConditions &conditions() {
+  static const ViewingConditions vc = [] {
+    const double whiteX = 95.047, whiteY = 100.0, whiteZ = 108.883;
+    const double rW = 0.401288 * whiteX + 0.650173 * whiteY - 0.051461 * whiteZ;
+    const double gW = -0.250268 * whiteX + 1.204414 * whiteY + 0.045854 * whiteZ;
+    const double bW = -0.002079 * whiteX + 0.048952 * whiteY + 0.953127 * whiteZ;
+    const double surround = 2.0;
+    const double f = 0.8 + surround / 10.0;
+    const double c = f >= 0.9 ? 0.59 + (0.69 - 0.59) * ((f - 0.9) * 10.0)
+                              : 0.525 + (0.59 - 0.525) * ((f - 0.8) * 10.0);
+    const double adaptingLuminance = (200.0 / kPi) * yFromTone(50.0) / 100.0;
+    double d = f * (1.0 - (1.0 / 3.6) * std::exp((-adaptingLuminance - 42.0) / 92.0));
+    d = qBound(0.0, d, 1.0);
+    const double k = 1.0 / (5.0 * adaptingLuminance + 1.0);
+    const double k4 = k * k * k * k;
+    const double k4F = 1.0 - k4;
+    const double fl = k4 * adaptingLuminance + 0.1 * k4F * k4F * std::cbrt(5.0 * adaptingLuminance);
+    const double n = yFromTone(50.0) / whiteY;
+    const double z = 1.48 + std::sqrt(n);
+    const double nbb = 0.725 / std::pow(n, 0.2);
+    ViewingConditions out{};
+    out.rgbD[0] = d * (100.0 / rW) + 1.0 - d;
+    out.rgbD[1] = d * (100.0 / gW) + 1.0 - d;
+    out.rgbD[2] = d * (100.0 / bW) + 1.0 - d;
+    const double factors[3] = {std::pow(fl * out.rgbD[0] * rW / 100.0, 0.42),
+                               std::pow(fl * out.rgbD[1] * gW / 100.0, 0.42),
+                               std::pow(fl * out.rgbD[2] * bW / 100.0, 0.42)};
+    const double rgbA[3] = {400.0 * factors[0] / (factors[0] + 27.13),
+                            400.0 * factors[1] / (factors[1] + 27.13),
+                            400.0 * factors[2] / (factors[2] + 27.13)};
+    out.aw = (2.0 * rgbA[0] + rgbA[1] + 0.05 * rgbA[2]) * nbb;
+    out.nbb = nbb;
+    out.ncb = nbb;
+    out.c = c;
+    out.nc = f;
+    out.n = n;
+    out.fl = fl;
+    out.flRoot = std::pow(fl, 0.25);
+    out.z = z;
+    return out;
+  }();
+  return vc;
+}
+
+double adapt(double component) {
+  const double af = std::pow(conditions().fl * std::abs(component) / 100.0, 0.42);
+  return std::copysign(400.0 * af / (af + 27.13), component);
+}
+double unadapt(double adapted) {
+  const double magnitude = std::abs(adapted);
+  const double base = std::max(0.0, 27.13 * magnitude / (400.0 - magnitude));
+  return std::copysign(std::pow(base, 1.0 / 0.42), adapted);
+}
+
+// The colour whose CAM16 hue and chroma are the ones asked for and whose tone
+// lands on the requested Y, or an invalid colour when sRGB cannot hold it.
+QColor resultByJ(double hueRadians, double chroma, double y) {
+  const auto &vc = conditions();
+  double j = std::sqrt(y) * 11.0;
+  const double tInnerCoeff = 1.0 / std::pow(1.64 - std::pow(0.29, vc.n), 0.73);
+  const double eHue = 0.25 * (std::cos(hueRadians + 2.0) + 3.8);
+  const double p1 = eHue * (50000.0 / 13.0) * vc.nc * vc.ncb;
+  const double hSin = std::sin(hueRadians), hCos = std::cos(hueRadians);
+  for (int round = 0; round < 5; ++round) {
+    const double jNormalized = j / 100.0;
+    const double alpha = chroma == 0.0 || j == 0.0 ? 0.0 : chroma / std::sqrt(jNormalized);
+    const double t = std::pow(alpha * tInnerCoeff, 1.0 / 0.9);
+    const double ac = vc.aw * std::pow(jNormalized, 1.0 / vc.c / vc.z);
+    const double p2 = ac / vc.nbb;
+    const double gamma =
+        23.0 * (p2 + 0.305) * t / (23.0 * p1 + 11.0 * t * hCos + 108.0 * t * hSin);
+    const double a = gamma * hCos, b = gamma * hSin;
+    const double rA = (460.0 * p2 + 451.0 * a + 288.0 * b) / 1403.0;
+    const double gA = (460.0 * p2 - 891.0 * a - 261.0 * b) / 1403.0;
+    const double bA = (460.0 * p2 - 220.0 * a - 6300.0 * b) / 1403.0;
+    const double rS = unadapt(rA), gS = unadapt(gA), bS = unadapt(bA);
+    // Undiscounted CAM16 response back to linear sRGB, in one step.
+    const double red = 1373.2198709594231 * rS - 1100.4251190754821 * gS - 7.278681089101213 * bS;
+    const double green = -271.815969077903 * rS + 559.6580465940733 * gS - 32.46047482791194 * bS;
+    const double blue = 1.9622899599665666 * rS - 57.173814538844006 * gS + 308.7233197812385 * bS;
+    if (red < 0 || green < 0 || blue < 0)
+      return {};
+    const double fnj = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    if (fnj <= 0)
+      return {};
+    if (round == 4 || std::abs(fnj - y) < 0.002) {
+      if (red > 100.01 || green > 100.01 || blue > 100.01)
+        return {};
+      return fromLinearRgb(red, green, blue);
+    }
+    j = j - (fnj - y) * j / (2.0 * fnj);
+  }
+  return {};
+}
+
+} // namespace
+
+double toneOf(const QColor &color) {
+  const double y = 0.2126 * linearized(color.redF()) + 0.7152 * linearized(color.greenF()) +
+                   0.0722 * linearized(color.blueF());
+  return toneFromY(y);
+}
+
+Hct measure(const QColor &color) {
+  const auto &vc = conditions();
+  const double r = linearized(color.redF()), g = linearized(color.greenF()),
+               b = linearized(color.blueF());
+  const double x = 0.41233895 * r + 0.35762064 * g + 0.18051042 * b;
+  const double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const double z = 0.01932141 * r + 0.11916382 * g + 0.95034478 * b;
+  const double rC = 0.401288 * x + 0.650173 * y - 0.051461 * z;
+  const double gC = -0.250268 * x + 1.204414 * y + 0.045854 * z;
+  const double bC = -0.002079 * x + 0.048952 * y + 0.953127 * z;
+  const double rA = adapt(vc.rgbD[0] * rC), gA = adapt(vc.rgbD[1] * gC),
+               bA = adapt(vc.rgbD[2] * bC);
+  const double a = (11.0 * rA - 12.0 * gA + bA) / 11.0;
+  const double bb = (rA + gA - 2.0 * bA) / 9.0;
+  const double u = (20.0 * rA + 20.0 * gA + 21.0 * bA) / 20.0;
+  const double p2 = (40.0 * rA + 20.0 * gA + bA) / 20.0;
+  const double hue = sanitizeDegrees(std::atan2(bb, a) * 180.0 / kPi);
+  const double j = 100.0 * std::pow(p2 * vc.nbb / vc.aw, vc.c * vc.z);
+  const double huePrime = hue < 20.14 ? hue + 360.0 : hue;
+  const double eHue = 0.25 * (std::cos(huePrime * kPi / 180.0 + 2.0) + 3.8);
+  const double t = eHue * (50000.0 / 13.0) * vc.nc * vc.ncb * std::sqrt(a * a + bb * bb) /
+                   (u + 0.305);
+  const double alpha = std::pow(t, 0.9) * std::pow(1.64 - std::pow(0.29, vc.n), 0.73);
+  return {hue, alpha * std::sqrt(j / 100.0), toneFromY(y)};
+}
+
+QColor solve(double hue, double chroma, double tone) {
+  tone = qBound(0.0, tone, 100.0);
+  const double y = yFromTone(tone);
+  const double grey = qBound(0.0, delinearized(y), 1.0);
+  if (chroma < 0.0001 || tone < 0.0001 || tone > 99.9999)
+    return QColor::fromRgbF(grey, grey, grey);
+  const double hueRadians = sanitizeDegrees(hue) * kPi / 180.0;
+  // Approach the requested chroma from above; the first value sRGB can hold at
+  // this tone and hue is the answer.
+  for (double c = chroma; c > 0; c -= 0.25)
+    if (const auto found = resultByJ(hueRadians, c, y); found.isValid())
+      return found;
+  return QColor::fromRgbF(grey, grey, grey);
+}
+
+namespace {
+// Material turns the secondary and tertiary hues by an amount that depends on
+// where the source sits on the wheel, so a scheme stays balanced whatever it is
+// given. The breaks and the rotations are Material's own tables.
+double rotatedHue(double hue, const QList<double> &breaks, const QList<double> &rotations) {
+  for (int i = 0; i < breaks.size() - 1; ++i)
+    if (breaks[i] <= hue && hue < breaks[i + 1])
+      return sanitizeDegrees(hue + rotations[i]);
+  return hue;
+}
+const QList<double> kVibrantBreaks{0, 41, 61, 101, 131, 181, 251, 301, 360};
+const QList<double> kExpressiveBreaks{0, 21, 51, 121, 151, 191, 271, 321, 360};
+
+double rawTemperature(const QColor &color) {
+  const double r = linearized(color.redF()), g = linearized(color.greenF()),
+               b = linearized(color.blueF());
+  const double x = 0.41233895 * r + 0.35762064 * g + 0.18051042 * b;
+  const double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const double z = 0.01932141 * r + 0.11916382 * g + 0.95034478 * b;
+  const double a = 500.0 * (labF(x / 95.047) - labF(y / 100.0));
+  const double bb = 200.0 * (labF(y / 100.0) - labF(z / 108.883));
+  const double hue = sanitizeDegrees(std::atan2(bb, a) * 180.0 / kPi);
+  const double chroma = std::hypot(a, bb);
+  // MCU temperature_cache.ts:272-282 uses Lab hue and chroma to measure
+  // relative warmth. The constant offset cancels during analogue selection.
+  return -0.5 + 0.02 * std::pow(chroma, 1.07) *
+                    std::cos(sanitizeDegrees(hue - 50.0) * kPi / 180.0);
+}
+
+double desiredChromaTone(const TonalPalette &palette, double initial, bool decreasing) {
+  // MCU color_spec_2021.ts:40-72 and :429-449 move Content's secondary
+  // container toward the tone where its palette can hold more chroma.
+  double answer = initial;
+  auto closest = measure(palette.tone(answer));
+  if (closest.chroma >= palette.chroma) return answer;
+  double peak = closest.chroma;
+  while (closest.chroma < palette.chroma) {
+    answer += decreasing ? -1 : 1;
+    if (answer < 0 || answer > 100) break;
+    const auto possible = measure(palette.tone(answer));
+    if (peak > possible.chroma || std::abs(possible.chroma - palette.chroma) < 0.4) break;
+    if (std::abs(possible.chroma - palette.chroma) < std::abs(closest.chroma - palette.chroma))
+      closest = possible;
+    peak = std::max(peak, possible.chroma);
+  }
+  return qBound(0.0, answer, 100.0);
+}
+
+bool isDisliked(const Hct &color) {
+  // MCU dislike_analyzer.ts:41-62 rounds the achieved HCT hue, chroma and
+  // tone before deciding whether a dark yellow-green needs tone 70.
+  return std::round(color.hue) >= 90 && std::round(color.hue) <= 111 &&
+         std::round(color.chroma) > 16 && std::round(color.tone) < 65;
+}
+
+TonalPalette contentTertiary(const QColor &source, const Hct &sourceHct) {
+  static QMutex mutex;
+  static QHash<QRgb, TonalPalette> cache;
+  {
+    QMutexLocker lock(&mutex);
+    if (auto found = cache.constFind(source.rgb()); found != cache.cend()) return *found;
+  }
+  // MCU dynamic_scheme.ts:663-670 chooses analogous(3, 6)[2].
+  // temperature_cache.ts:67-145 divides the full wheel by cumulative
+  // absolute temperature change. The third analogue is the first clockwise
+  // sixth, not a fixed 60 degree hue rotation.
+  std::array<double, 360> temperatures{};
+  const int start = int(std::round(sourceHct.hue)) % 360;
+  for (int hue = 0; hue < 360; ++hue)
+    temperatures[hue] = rawTemperature(solve(hue, sourceHct.chroma, sourceHct.tone));
+  double total = 0;
+  for (int step = 1; step <= 360; ++step)
+    total += std::abs(temperatures[(start + step) % 360] -
+                      temperatures[(start + step - 1) % 360]);
+  double traveled = 0;
+  int analogue = start;
+  for (int step = 1; step <= 360; ++step) {
+    const int hue = (start + step) % 360;
+    traveled += std::abs(temperatures[hue] - temperatures[(start + step - 1) % 360]);
+    if (traveled >= total / 6.0) { analogue = hue; break; }
+  }
+  auto candidate = measure(solve(analogue, sourceHct.chroma, sourceHct.tone));
+  // MCU dislike_analyzer.ts:41-62 lightens non-neutral dark yellow-greens.
+  if (isDisliked(candidate))
+    candidate = measure(solve(candidate.hue, candidate.chroma, 70));
+  const TonalPalette palette{candidate.hue, candidate.chroma};
+  {
+    QMutexLocker lock(&mutex);
+    if (cache.size() >= 64) cache.clear();
+    cache.insert(source.rgb(), palette);
+  }
+  return palette;
+}
+} // namespace
+
+Variant variantFor(const QString &name) {
+  if (name == "neutral") return Variant::Neutral;
+  if (name == "vibrant") return Variant::Vibrant;
+  if (name == "expressive") return Variant::Expressive;
+  if (name == "content") return Variant::Content;
+  return Variant::TonalSpot;
+}
+
+QStringList variantNames() { return {"neutral", "tonalSpot", "vibrant", "expressive", "content"}; }
+
+Palettes palettesFor(const QColor &source, Variant variant) {
+  // Every variant is the same five palettes spread differently. The neutral
+  // ones carry a trace of the source hue, which is what tints the surfaces
+  // without colouring them.
+  const auto hct = measure(source);
+  const double hue = hct.hue, chroma = hct.chroma;
+  switch (variant) {
+  case Variant::Neutral:
+    return {TonalPalette{hue, 12.0}, TonalPalette{hue, 8.0}, TonalPalette{hue, 16.0},
+            TonalPalette{hue, 2.0}, TonalPalette{hue, 2.0}};
+  case Variant::Vibrant:
+    return {TonalPalette{hue, 200.0},
+            TonalPalette{rotatedHue(hue, kVibrantBreaks, {18, 15, 10, 12, 15, 18, 15, 12, 12}), 24.0},
+            TonalPalette{rotatedHue(hue, kVibrantBreaks, {35, 30, 20, 25, 30, 35, 30, 25, 25}), 32.0},
+            TonalPalette{hue, 10.0}, TonalPalette{hue, 12.0}};
+  case Variant::Expressive:
+    return {TonalPalette{sanitizeDegrees(hue + 240.0), 40.0},
+            TonalPalette{rotatedHue(hue, kExpressiveBreaks, {45, 95, 45, 20, 45, 90, 45, 45, 45}), 24.0},
+            TonalPalette{rotatedHue(hue, kExpressiveBreaks, {120, 120, 20, 45, 20, 15, 20, 120, 120}), 32.0},
+            TonalPalette{sanitizeDegrees(hue + 15.0), 8.0},
+            TonalPalette{sanitizeDegrees(hue + 15.0), 12.0}};
+  case Variant::Content:
+    // MCU dynamic_scheme.ts:602-635, 663-670, 700-733: Content retains the
+    // source's chroma and takes its tertiary from a temperature analogue.
+    return {TonalPalette{hue, chroma},
+            TonalPalette{hue, std::max(chroma - 32.0, chroma * 0.5)},
+            contentTertiary(source, hct),
+            TonalPalette{hue, chroma / 8.0},
+            TonalPalette{hue, chroma / 8.0 + 4.0}};
+  case Variant::TonalSpot:
+    break;
+  }
+  return {TonalPalette{hue, 36.0},
+          TonalPalette{hue, 16.0},
+          TonalPalette{sanitizeDegrees(hue + 60.0), 24.0},
+          TonalPalette{hue, 6.0},
+          TonalPalette{hue, 8.0}};
+}
+
+double contrastRatio(const QColor &a, const QColor &b) {
+  const double x = 0.2126 * linearized(a.redF()) + 0.7152 * linearized(a.greenF()) +
+                   0.0722 * linearized(a.blueF());
+  const double y = 0.2126 * linearized(b.redF()) + 0.7152 * linearized(b.greenF()) +
+                   0.0722 * linearized(b.blueF());
+  return (std::max(x, y) / 100.0 + 0.05) / (std::min(x, y) / 100.0 + 0.05);
+}
+
+namespace {
+// MCU contrast_curve.ts interpolates each role's four published ratios.
+struct ContrastCurve {
+  double low, normal, medium, high;
+  double at(double level) const {
+    if (level <= -1) return low;
+    if (level < 0) return low + (normal - low) * (level + 1);
+    if (level < 0.5) return normal + (medium - normal) * (level / 0.5);
+    if (level < 1) return medium + (high - medium) * ((level - 0.5) / 0.5);
+    return high;
+  }
+};
+double toneContrast(double a, double b) {
+  const double x = yFromTone(a) / 100.0, y = yFromTone(b) / 100.0;
+  return (std::max(x, y) + 0.05) / (std::min(x, y) + 0.05);
+}
+
+double mcuForegroundTone(double background, double ratio) {
+  // MCU contrast.ts:63-146 converts the target ratio to a tone, adding or
+  // subtracting 0.4 to allow for gamut mapping. dynamic_color.ts:319-358
+  // chooses the better side and prefers light ink below rounded T60.
+  const double backgroundY = yFromTone(background);
+  const double lightY = ratio * (backgroundY + 5.0) - 5.0;
+  const double darkY = (backgroundY + 5.0) / ratio - 5.0;
+  const double lightCandidate = toneFromY(lightY) + 0.4;
+  const double darkCandidate = toneFromY(darkY) - 0.4;
+  const double lighter = lightCandidate >= 0 && lightCandidate <= 100 ? lightCandidate : 100;
+  const double darker = darkCandidate >= 0 && darkCandidate <= 100 ? darkCandidate : 0;
+  const double lighterRatio = toneContrast(lighter, background);
+  const double darkerRatio = toneContrast(darker, background);
+  if (std::round(background) < 60) {
+    const bool nearlyEqualMiss = std::abs(lighterRatio - darkerRatio) < 0.1 &&
+                                 lighterRatio < ratio && darkerRatio < ratio;
+    return lighterRatio >= ratio || lighterRatio >= darkerRatio || nearlyEqualMiss
+               ? lighter : darker;
+  }
+  return darkerRatio >= ratio || darkerRatio >= lighterRatio ? darker : lighter;
+}
+
+// MCU dynamic_color.ts:388-548 keeps a role's normal tone when it already
+// clears its curve, otherwise it searches away from its background. This also
+// checks every supplied background because the same ink spans its surface
+// ladder. Searching in tone space avoids repeated HCT gamut solves.
+double toneFor(double initial, bool lighter, const QList<double> &backgrounds, double target) {
+  const auto clears = [&](double tone) {
+    for (double background : backgrounds)
+      if (toneContrast(tone, background) + 0.0001 < target) return false;
+    return true;
+  };
+  if (clears(initial)) return initial;
+  const auto search = [&](int direction) {
+    for (double tone = initial; tone >= 0 && tone <= 100; tone += direction * 0.25)
+      if (clears(tone)) return qBound(0.0, tone, 100.0);
+    return -1.0;
+  };
+  if (double found = search(lighter ? 1 : -1); found >= 0) return found;
+  if (double found = search(lighter ? -1 : 1); found >= 0) return found;
+  const auto weakest = [&](double tone) {
+    double ratio = 21;
+    for (double background : backgrounds) ratio = std::min(ratio, toneContrast(tone, background));
+    return ratio;
+  };
+  return weakest(100) > weakest(0) ? 100 : 0;
+}
+
+struct AccentTones { double accent, container; };
+struct PairTones { double nearer, farther; };
+PairTones resolvePair(double nearer, double farther, bool dark, double background,
+                      double nearRatio, double farRatio, bool stayTogether) {
+  // MCU dynamic_color.ts:392-479: solve each member against the common
+  // background, expand the farther member to ten tones, then avoid T50-59.
+  constexpr double delta = 10;
+  const double direction = dark ? 1 : -1;
+  if (toneContrast(background, nearer) < nearRatio)
+    nearer = mcuForegroundTone(background, nearRatio);
+  if (toneContrast(background, farther) < farRatio)
+    farther = mcuForegroundTone(background, farRatio);
+  if ((farther - nearer) * direction < delta) {
+    farther = qBound(0.0, nearer + delta * direction, 100.0);
+    if ((farther - nearer) * direction < delta)
+      nearer = qBound(0.0, farther - delta * direction, 100.0);
+  }
+  const auto awkward = [](double tone) { return tone >= 50 && tone < 60; };
+  if (awkward(nearer) || (stayTogether && awkward(farther))) {
+    if (dark) {
+      nearer = 60;
+      farther = std::max(farther, nearer + delta);
+    } else {
+      nearer = 49;
+      farther = std::min(farther, nearer - delta);
+    }
+  } else if (awkward(farther)) {
+    farther = dark ? 60 : 49;
+  }
+  return {nearer, farther};
+}
+
+AccentTones accentTones(double accent, double container, bool dark, double background,
+                        double accentRatio, double containerRatio) {
+  // MCU color_spec_2021.ts:325-326 pairs Container as nearer and Accent as
+  // farther, with stayTogether false.
+  const auto pair = resolvePair(container, accent, dark, background,
+                                containerRatio, accentRatio, false);
+  return {pair.farther, pair.nearer};
+}
+
+AccentTones fixedTones(bool dark, double background, double ratio) {
+  // MCU color_spec_2021.ts:604-740 uses ToneDeltaPair(Fixed, FixedDim, 10,
+  // lighter, true): Fixed is nearer in light, FixedDim nearer in dark. If
+  // their gap contracts in dark, round two moves the farther Fixed role.
+  const auto pair = dark ? resolvePair(80, 90, true, background, ratio, ratio, true)
+                         : resolvePair(90, 80, false, background, ratio, ratio, true);
+  return dark ? AccentTones{pair.farther, pair.nearer}
+              : AccentTones{pair.nearer, pair.farther};
+}
+
+// MCU color_spec_2021.ts:130-739 publishes these distinct role curves.
+constexpr ContrastCurve kOnSurface{4.5, 7, 11, 21};
+constexpr ContrastCurve kOnSurfaceVariant{3, 4.5, 7, 11};
+constexpr ContrastCurve kPrimary{3, 4.5, 7, 7};
+constexpr ContrastCurve kContainer{1, 1, 3, 4.5};
+constexpr ContrastCurve kOnContainer{3, 4.5, 7, 11};
+constexpr ContrastCurve kOnAccent{4.5, 7, 11, 21};
+constexpr ContrastCurve kFixedVariant{3, 4.5, 7, 11};
+constexpr ContrastCurve kOutline{1.5, 3, 4.5, 7};
+constexpr ContrastCurve kOutlineVariant{1, 1, 3, 4.5};
+} // namespace
+
+QVariantMap scheme(const QColor &source, bool dark, Variant variant, double contrast) {
+  if (!source.isValid() || source.alpha() == 0) return {};
+  const auto p = palettesFor(source, variant);
+  QVariantMap roles;
+  const auto put = [&roles](const char *name, const QColor &color) { roles.insert(name, color); };
+  contrast = qBound(0.0, contrast, 1.0);
+  const auto curve = [contrast](ContrastCurve c) { return c.at(contrast); };
+  // MCU color_spec_2021.ts:130-221. The contrast ladder moves independently
+  // of the source palette. Standard level retains the existing 2021 tones.
+  const double surface = dark ? 6 : 98;
+  const double dim = dark ? 6 : (contrast <= 0.5 ? 87 - 14 * contrast : 80 - 10 * (contrast - 0.5));
+  const double bright = dark ? (contrast <= 0.5 ? 24 + 10 * contrast : 29 + 10 * (contrast - 0.5)) : 98;
+  const double lowest = dark ? 4 - 4 * contrast : 100;
+  const double low = dark ? 10 + 2 * contrast : (contrast <= 0.5 ? 96 : 96 - 2 * (contrast - 0.5));
+  const double middle = dark ? (contrast <= 0.5 ? 12 + 8 * contrast : 16 + 8 * (contrast - 0.5))
+                             : 94 - 4 * contrast;
+  const double high = dark ? (contrast <= 0.5 ? 17 + 8 * contrast : 21 + 8 * (contrast - 0.5))
+                           : (contrast <= 0.5 ? 92 - 8 * contrast : 88 - 6 * (contrast - 0.5));
+  const double highest = dark ? (contrast <= 0.5 ? 22 + 8 * contrast : 26 + 8 * (contrast - 0.5))
+                              : (contrast <= 0.5 ? 90 - 12 * contrast : 84 - 8 * (contrast - 0.5));
+  const double adjacent = dark ? bright : dim; // highestSurface in MCU.
+  for (const auto &entry : {std::pair{"background", surface}, {"surface", surface},
+                            {"surfaceDim", dim}, {"surfaceBright", bright},
+                            {"surfaceContainerLowest", lowest}, {"surfaceContainerLow", low},
+                            {"surfaceContainer", middle}, {"surfaceContainerHigh", high},
+                            {"surfaceContainerHighest", highest}})
+    put(entry.first, p.neutral.tone(entry.second));
+  put("surfaceVariant", p.neutralVariant.tone(dark ? 30 : 90));
+  put("scrim", p.neutral.tone(0));
+  put("shadow", p.neutral.tone(0));
+
+  const auto ink = [&](const char *name, const TonalPalette &palette, double initial,
+                       bool lighter, const QList<double> &backgrounds, double ratio) {
+    const double tone = toneFor(initial, lighter, backgrounds, ratio);
+    put(name, palette.tone(tone));
+  };
+  ink("onBackground", p.neutral, dark ? 90 : 10, dark, {surface},
+      curve({3, 3, 4.5, 7}));
+  ink("onSurface", p.neutral, dark ? 90 : 10, dark, {adjacent, surface, low, middle, high, highest},
+      curve(kOnSurface));
+  ink("onSurfaceVariant", p.neutralVariant, dark ? 80 : 30, dark,
+      {adjacent, surface, low, middle, high, highest}, curve(kOnSurfaceVariant));
+  ink("outline", p.neutralVariant, dark ? 60 : 50, dark, {adjacent}, curve(kOutline));
+  ink("outlineVariant", p.neutralVariant, dark ? 30 : 80, dark, {adjacent}, curve(kOutlineVariant));
+
+  // MCU color_spec_2021.ts:250-265 and 385-392. Inverse roles have their own
+  // background and their own contrast curves.
+  const double inverseSurface = dark ? 90 : 20;
+  put("inverseSurface", p.neutral.tone(inverseSurface));
+  ink("inverseOnSurface", p.neutral, dark ? 20 : 95, !dark, {inverseSurface}, curve(kOnSurface));
+  ink("inversePrimary", p.primary, dark ? 40 : 80, !dark, {inverseSurface}, curve(kPrimary));
+
+  const auto family = [&](const QString &name, const TonalPalette &palette, double containerInitial) {
+    const QString capital = name.at(0).toUpper() + name.mid(1);
+    const auto pair = accentTones(dark ? 80 : 40, containerInitial, dark, adjacent,
+                                  curve(kPrimary), curve(kContainer));
+    roles.insert(name, palette.tone(pair.accent));
+    roles.insert(name + "Container", palette.tone(pair.container));
+    roles.insert("on" + capital,
+                 palette.tone(toneFor(dark ? 20 : 100, !dark, {pair.accent}, curve(kOnAccent))));
+    // MCU color_spec_2021.ts:367-382, 452-467, 529-545: only Content's
+    // accent containers begin at foregroundTone(container, 4.5). Error keeps
+    // its ordinary 90 dark / 30 light initial tone (lines 587-599).
+    const bool fidelityInk = variant == Variant::Content && name != "error";
+    // .tone(s) in MCU is the container's initial tone, before its delta pair
+    // and contrast adjustment; the curve then checks the resolved container.
+    const double initialInk = fidelityInk ? mcuForegroundTone(containerInitial, 4.5)
+                                           : (dark ? 90 : 30);
+    const double desired = curve(kOnContainer);
+    const double resolvedInk = toneContrast(pair.container, initialInk) >= desired
+                                   ? initialInk : mcuForegroundTone(pair.container, desired);
+    roles.insert("on" + capital + "Container", palette.tone(resolvedInk));
+  };
+  // MCU color_spec_2021.ts:312-599. Content starts primaryContainer at the
+  // source tone; its other containers search for chroma near their base tone.
+  const double sourceTone = toneOf(source);
+  family("primary", p.primary, variant == Variant::Content ? sourceTone : (dark ? 30 : 90));
+  family("secondary", p.secondary,
+         variant == Variant::Content ? desiredChromaTone(p.secondary, dark ? 30 : 90, !dark)
+                                     : (dark ? 30 : 90));
+  // MCU color_spec_2021.ts:508-526 tests the achievable HCT colour at the
+  // source tone, then fixes the disliked one before applying contrast.
+  const double tertiaryStart = variant == Variant::Content
+      ? (isDisliked(measure(p.tertiary.tone(sourceTone))) ? 70 : sourceTone)
+      : (dark ? 30 : 90);
+  family("tertiary", p.tertiary, tertiaryStart);
+  family("error", p.error, dark ? 30 : 90);
+  put("surfaceTint", roles.value("primary").value<QColor>());
+
+  const auto putFixed = [&](const QString &name, const TonalPalette &palette) {
+    const QString capital = name.at(0).toUpper() + name.mid(1);
+    const auto pair = fixedTones(dark, adjacent, curve(kContainer));
+    const auto fixedInk = toneFor(10, pair.accent < 60, {pair.accent, pair.container}, curve(kOnAccent));
+    const auto variantInk = toneFor(30, pair.accent < 60, {pair.accent, pair.container}, curve(kFixedVariant));
+    roles.insert(name + "Fixed", palette.tone(pair.accent));
+    roles.insert(name + "FixedDim", palette.tone(pair.container));
+    roles.insert("on" + capital + "Fixed", palette.tone(fixedInk));
+    roles.insert("on" + capital + "FixedVariant", palette.tone(variantInk));
+  };
+  putFixed("primary", p.primary);
+  putFixed("secondary", p.secondary);
+  putFixed("tertiary", p.tertiary);
+  return roles;
+}
+
+} // namespace m3

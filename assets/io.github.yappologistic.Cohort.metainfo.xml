@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.yappologistic.Cohort</id>
+  <name>Cohort</name>
+  <summary>Power, battery, fan and keyboard settings for Lenovo Legion laptops</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      Cohort changes the settings Lenovo's own software changes on Windows,
+      through the drivers Linux already has: power modes and custom power
+      limits, battery conservation and rapid charging, always-on USB, Fn lock,
+      fan curves, and the four-zone keyboard lighting.
+    </p>
+    <p>
+      Cohort is an independent project. It is not made, endorsed or supported
+      by Lenovo.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.yappologistic.Cohort.desktop</launchable>
+  <url type="homepage">https://github.com/yappologistic/Cohort</url>
+  <url type="bugtracker">https://github.com/yappologistic/Cohort/issues</url>
+  <developer id="io.github.yappologistic">
+    <name>yappologistic</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <categories>
+    <category>Settings</category>
+    <category>HardwareSettings</category>
+  </categories>
+  <releases>
+    <release version="0.1.0" date="2026-09-25"/>
+  </releases>
+</component>

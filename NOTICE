@@ -1,0 +1,61 @@
+Cohort
+Copyright (C) 2026 Cohort contributors
+Licensed under the GNU General Public License, version 3 or (at your option)
+any later version. The license is in LICENSE.
+
+Cohort is an independent project. It is not made, endorsed or supported by
+Lenovo. Lenovo and Legion are trademarks of Lenovo; they are used here only
+to say which laptops Cohort works with.
+
+
+Code carried over from other projects
+-------------------------------------
+
+The Material 3 dynamic colour engine (src/m3color.*), the motion spring
+solver (src/m3motion.*), the desktop palette reader (src/desktoptheme.*),
+tests/m3motion_test.cpp, and the Material components in qml/ whose names
+begin with M, along with Icon.qml and CohortText.qml, are carried over from
+Sung and Tusk, the same author's music player and system monitor, and adapted
+here. Sung and Tusk are MIT licensed; the MIT notice they carry is in
+licenses/Sung-MIT.txt.
+
+
+Icons
+-----
+
+Cohort uses Google Material Symbols, licensed under Apache-2.0. The license
+is provided in licenses/MaterialSymbols-LICENSE.txt. Icons originate from
+https://github.com/google/material-design-icons and are the official
+Material Symbols Rounded SVG assets at the 20px, 24px and 40px optical sizes,
+FILL=1.
+
+The application icon is original to Cohort.
+
+
+Hardware interfaces
+-------------------
+
+Cohort talks only to interfaces the Linux kernel publishes. It incorporates no
+code from any of the projects below; they are credited because their work is
+what documents the interfaces.
+
+- The legion_laptop kernel module from LenovoLegionLinux
+  (https://github.com/johnfanv2/LenovoLegionLinux, GPL-2.0-or-later) provides
+  fan curves and several switches. Cohort reads and writes the sysfs
+  attributes the module publishes; the module must be installed separately.
+- The lenovo-wmi-gamezone, lenovo-wmi-other and ideapad-laptop drivers are
+  part of the Linux kernel.
+- The four-zone keyboard's HID report layout is documented by
+  L5P-Keyboard-RGB (https://github.com/4JX/L5P-Keyboard-RGB) and OpenRGB's
+  Lenovo4ZoneUSBController (https://gitlab.com/CalcProgrammer1/OpenRGB).
+
+
+Runtime dependencies
+--------------------
+
+Qt is dynamically linked and carries its own licenses:
+https://www.qt.io/licensing/open-source-lgpl-obligations
+NVIDIA's NVML, where installed, is opened at runtime and never linked.
+No fonts are bundled. Cohort uses the desktop's own font.
+
+Visual reference: Google Material Design 3. Cohort is independent of Google.

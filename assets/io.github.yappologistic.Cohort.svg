@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="8" y="8" width="112" height="112" rx="36" fill="#3a2a24"/>
+  <g transform="translate(64 64)" fill="#ffb596">
+    <path id="blade" d="M0 -6 C 4 -26 18 -40 34 -38 C 38 -22 24 -8 6 -2 Z"/>
+    <use href="#blade" transform="rotate(120)"/>
+    <use href="#blade" transform="rotate(240)"/>
+  </g>
+  <circle cx="64" cy="64" r="9" fill="#ffdbcb"/>
+</svg>
