@@ -212,6 +212,8 @@ int main(int argc, char **argv) {
     const QString out = args.at(at + 1);
     QTimer::singleShot(0, &app, [window, out] { runUiTest(window, out); });
   }
+  if (args.contains("--latency-test"))
+    QTimer::singleShot(0, &app, [window] { runLatencyTest(window); });
 #endif
   return app.exec();
 }

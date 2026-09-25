@@ -12,8 +12,13 @@
 //   time, and the result is read back from the kernel rather than assumed.
 //
 // Nothing is sampled while the window is hidden. A tool that keeps a laptop
-// awake to report on the laptop has failed at its own job.
+// awake to report on the laptop has failed at its own job. Nothing is read on
+// the window's thread either: some of these files take the kernel tens of
+// milliseconds to produce (src/snapshot.h), so reads run on a worker, one at a
+// time, and the window applies each finished snapshot.
 #include "sensors.h"
+#include "snapshot.h"
+#include <QFutureWatcher>
 #include <QHash>
 #include <QObject>
 #include <QSettings>
@@ -96,11 +101,11 @@ public:
   QStringList chargeModes() const { return m_chargeModes; }
   QVariantMap battery() const { return m_battery; }
   QVariantMap switches() const { return m_switches; }
-  double cpuTemperature() const { return m_sensors.cpu(); }
-  double gpuTemperature() const { return m_sensors.gpu(); }
-  bool gpuPresent() const { return m_sensors.gpuPresent(); }
-  bool gpuAsleep() const { return m_sensors.gpuAsleep(); }
-  QVariantList fans() const { return m_sensors.fans(); }
+  double cpuTemperature() const { return m_cpu; }
+  double gpuTemperature() const { return m_gpu; }
+  bool gpuPresent() const { return m_gpuPresent; }
+  bool gpuAsleep() const { return m_gpuAsleep; }
+  QVariantList fans() const { return m_fans; }
   bool legionModule() const { return m_legionModule; }
   QVariantMap fanCurve() const { return m_fanCurve; }
   bool lightingAvailable() const { return m_lightingAvailable; }
@@ -132,10 +137,10 @@ private:
     QStringList arguments; // after the helper's path
     QString what;        // how a failure names it
   };
-  void readControls();
-  void readBattery();
-  void readFanCurve();
-  void sample();
+  // Asks for a reading. One runs at a time; asking while one runs asks for
+  // another after it, with the union of what was wanted.
+  void requestRead(bool full, bool reapply = false, bool rediscover = false);
+  void apply(const Snapshot &snapshot);
   void watchProfile();
   void enqueue(const Request &request);
   void runNext();
@@ -167,7 +172,22 @@ private:
   QVariantMap m_lighting;
   QStringList m_pending;
 
+  double m_cpu = 0;
+  double m_gpu = 0;
+  bool m_gpuPresent = false;
+  bool m_gpuAsleep = false;
+  QVariantList m_fans;
+
+  // Used only by the capture in flight.
   Sensors m_sensors;
+  QFutureWatcher<Snapshot> m_reading;
+  struct Wanted {
+    bool read = false, full = false, reapply = false, rediscover = false;
+  } m_wanted, m_inFlight;
+  // Changes that have been made and are waiting for the kernel's answer to
+  // be read back. Their pending state ends when a read that started after
+  // them lands, so a control never shows the old value in between.
+  QStringList m_settling, m_settlingInFlight;
   std::unique_ptr<QSocketNotifier> m_profileNotifier;
   int m_profileFd = -1;
 

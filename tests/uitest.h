@@ -9,3 +9,9 @@ class QQuickWindow;
 class QString;
 
 void runUiTest(QQuickWindow *window, const QString &out);
+
+// How long the window's thread is kept from drawing while the machine is
+// sampled, on this machine: a timer asks for every frame for ten seconds with
+// the Fans page showing, and the longest gap between ticks is reported. A
+// stall over 50ms, three frames at 60Hz, fails.
+void runLatencyTest(QQuickWindow *window);

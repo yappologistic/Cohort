@@ -11,6 +11,7 @@
 #include <QDBusVariant>
 #include <QFileInfo>
 #include <QProcess>
+#include <QtConcurrent/QtConcurrentRun>
 #include <cmath>
 #include <fcntl.h>
 #include <algorithm>
@@ -21,36 +22,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-// The on/off controls the window can show, by the key the helper knows them
-// by. Their labels live with the pages that show them.
-const char *const kSwitchKeys[] = {
-    "fn-lock",           "usb-charging",          "legion/winkey",    "legion/touchpad",
-    "legion/overdrive",  "legion/gsync",          "legion/fan_fullspeed", "legion/lockfancontroller",
-    "led/platform::ylogo", "led/platform::ioport",
-};
-
-// The firmware power limits worth a slider, from the attributes
-// lenovo-wmi-other publishes (Documentation/wmi/devices/lenovo-wmi-other.rst).
-// Each carries the unit its value is in. The rest of what the driver
-// publishes are modes and identifiers written as integers, which a slider
-// would misrepresent, and are left alone.
-struct Limit {
-  const char *name;
-  const char *label;
-  const char *unit;
-};
-const Limit kLimits[] = {
-    {"ppt_pl1_spl", "Sustained CPU power", "W"},
-    {"ppt_pl2_sppt", "Short-term CPU power", "W"},
-    {"ppt_pl3_fppt", "Peak CPU power", "W"},
-    {"ppt_pl4_ipl", "Instantaneous CPU power", "W"},
-    {"ppt_pl1_tau", "Sustained power window", "s"},
-    {"cpu_temp", "CPU temperature limit", "°C"},
-    {"gpu_nv_ctgp", "GPU power", "W"},
-    {"gpu_nv_ppab", "GPU boost power", "W"},
-    {"gpu_temp", "GPU temperature limit", "°C"},
-};
 
 QString mapDaemonProfile(const QString &profile, const QStringList &choices) {
   // power-profiles-daemon's platform_profile driver maps power-saver to
@@ -109,10 +80,7 @@ Machine::Machine(fs::path root, QObject *parent)
   // glance at and slow enough to cost nothing measurable; it only runs while
   // the window is visible.
   m_timer.setInterval(2000);
-  connect(&m_timer, &QTimer::timeout, this, [this] {
-    readControls();
-    sample();
-  });
+  connect(&m_timer, &QTimer::timeout, this, [this] { requestRead(false); });
   m_lightingDebounce.setSingleShot(true);
   // A colour dragged across a picker sends one report when it rests, not one
   // per frame, and each report is a process under pkexec.
@@ -135,15 +103,37 @@ Machine::Machine(fs::path root, QObject *parent)
   // (LenovoLegionLinux extra/service/legiond). Writing sooner is overwritten.
   m_curveReapply.setSingleShot(true);
   m_curveReapply.setInterval(1500);
-  connect(&m_curveReapply, &QTimer::timeout, this, &Machine::reapplyFanCurve);
+  // The reapply compares against the curve the firmware has now, so it
+  // reads the curve first and decides once that read lands.
+  connect(&m_curveReapply, &QTimer::timeout, this, [this] { requestRead(true, true); });
+  connect(&m_reading, &QFutureWatcherBase::finished, this, [this] {
+    const Wanted done = m_inFlight;
+    m_inFlight = {};
+    apply(m_reading.result());
+    for (const auto &key : std::as_const(m_settlingInFlight))
+      if (!m_settling.contains(key) && std::none_of(m_queue.cbegin(), m_queue.cend(),
+                                                    [&](const Request &r) { return r.key == key; }))
+        setPending(key, false);
+    m_settlingInFlight.clear();
+    if (done.reapply)
+      reapplyFanCurve();
+    if (m_wanted.read)
+      requestRead(m_wanted.full, m_wanted.reapply, m_wanted.rediscover);
+  });
 
-  m_sensors.discover();
-  readControls();
-  sample();
+  // The first reading is taken here, so the window opens on real figures.
+  // It leaves out the full reading's slow part, which follows at once from
+  // the worker.
+  apply(capture(m_root, m_sensors, false, true));
+  // That reading skipped the module's switches; they arrive with the full
+  // one below, and until then the rows for them are not shown.
+  requestRead(true);
   watchProfile();
 }
 
 Machine::~Machine() {
+  // The worker holds the sensors; it finishes before they go.
+  m_reading.waitForFinished();
   m_profileNotifier.reset();
   if (m_profileFd >= 0)
     ::close(m_profileFd);
@@ -158,9 +148,9 @@ void Machine::setActive(bool active) {
     return;
   m_active = active;
   if (active) {
-    // Coming back is when the figures are most stale, so read at once.
-    readControls();
-    sample();
+    // Coming back is when the figures are most stale, so read at once, and
+    // fully: a hotkey may have changed a switch while the window was away.
+    requestRead(true);
     m_timer.start();
   } else {
     m_timer.stop();
@@ -168,10 +158,25 @@ void Machine::setActive(bool active) {
   emit activeChanged();
 }
 
-void Machine::refresh() {
-  m_sensors.discover();
-  readControls();
-  sample();
+void Machine::refresh() { requestRead(true, false, true); }
+
+void Machine::requestRead(bool full, bool reapply, bool rediscover) {
+  m_wanted.full |= full;
+  m_wanted.reapply |= reapply;
+  m_wanted.rediscover |= rediscover;
+  m_wanted.read = true;
+  if (m_reading.isRunning())
+    return;
+  m_inFlight = m_wanted;
+  m_wanted = {};
+  m_settlingInFlight = m_settling;
+  m_settling.clear();
+  const auto root = m_root;
+  Sensors *sensors = &m_sensors;
+  const Wanted what = m_inFlight;
+  m_reading.setFuture(QtConcurrent::run([root, sensors, what] {
+    return capture(root, *sensors, what.full, what.rediscover);
+  }));
 }
 
 void Machine::watchProfile() {
@@ -192,174 +197,45 @@ void Machine::watchProfile() {
     char again[64];
     ::lseek(m_profileFd, 0, SEEK_SET);
     [[maybe_unused]] auto read = ::read(m_profileFd, again, sizeof again);
-    readControls();
+    requestRead(false);
   });
 }
 
-void Machine::readControls() {
+void Machine::apply(const Snapshot &s) {
   const auto previousProfile = m_powerProfile;
-  QString profile;
-  QStringList profiles;
-  if (const auto control = controls::resolve(m_root, "platform-profile")) {
-    for (const auto &word : control->choices)
-      profiles << QString::fromStdString(word);
-    profile = QString::fromStdString(controls::currentProfile(m_root));
-  }
-
-  QVariantList limits;
-  for (const auto &attribute : controls::firmwareAttributes(m_root)) {
-    const auto name = attribute.filename().string();
-    for (const auto &limit : kLimits) {
-      if (name != limit.name)
-        continue;
-      const auto control = controls::resolve(m_root, "firmware/" + name);
-      const auto value = controls::parseInteger(controls::readText(attribute / "current_value").value_or(""));
-      if (!control || !value)
-        continue;
-      limits.append(QVariantMap{{"key", QString::fromStdString(control->key)},
-                                {"name", QString::fromLatin1(limit.name)},
-                                {"label", tr(limit.label)},
-                                {"unit", QString::fromUtf8(limit.unit)},
-                                {"value", int(*value)},
-                                {"minimum", int(control->minimum)},
-                                {"maximum", int(control->maximum)},
-                                {"step", int(control->step)}});
-    }
-  }
-
-  // Charging: the charge_types ABI where the kernel offers it, and the older
-  // pair of switches it replaced where it does not (conservation mode from
-  // ideapad-laptop or legion_laptop, rapid charge from legion_laptop).
-  QString mode;
-  QStringList modes;
-  if (const auto control = controls::resolve(m_root, "charge-types")) {
-    for (const char *word : {"Long_Life", "Standard", "Fast"})
-      if (std::find(control->choices.begin(), control->choices.end(), word) != control->choices.end())
-        modes << word;
-    mode = QString::fromStdString(controls::parseSelected(*controls::readText(control->path)));
-  } else {
-    auto conservation = controls::resolve(m_root, "conservation-mode");
-    if (!conservation)
-      conservation = controls::resolve(m_root, "legion/battery_conservation");
-    const auto rapid = controls::resolve(m_root, "legion/rapidcharge");
-    if (conservation)
-      modes << "Long_Life";
-    if (conservation || rapid)
-      modes << "Standard";
-    if (rapid)
-      modes << "Fast";
-    mode = QStringLiteral("Standard");
-    if (conservation && controls::readText(conservation->path).value_or("0") == "1")
-      mode = QStringLiteral("Long_Life");
-    else if (rapid && controls::readText(rapid->path).value_or("0") == "1")
-      mode = QStringLiteral("Fast");
-    if (modes.isEmpty())
-      mode.clear();
-  }
-
-  QVariantMap switches;
-  for (const char *key : kSwitchKeys) {
-    const auto control = controls::resolve(m_root, key);
-    if (!control)
-      continue;
-    const auto value = controls::parseInteger(controls::readText(control->path).value_or(""));
-    if (value)
-      switches.insert(key, *value > 0);
-  }
-
-  const bool legion = controls::legionDevice(m_root).has_value();
-  const bool lighting = keyboard::find(m_root).has_value();
-
-  const bool differs = profile != m_powerProfile || profiles != m_powerProfiles || limits != m_powerLimits ||
-                       mode != m_chargeMode || modes != m_chargeModes || switches != m_switches ||
-                       legion != m_legionModule || lighting != m_lightingAvailable;
-  m_powerProfile = profile;
-  m_powerProfiles = profiles;
-  m_powerLimits = limits;
-  m_chargeMode = mode;
-  m_chargeModes = modes;
+  // A reading that was not full did not look at the module's switches; the
+  // last values read stand.
+  QVariantMap switches = s.switches;
+  if (!s.full)
+    for (auto it = m_switches.cbegin(); it != m_switches.cend(); ++it)
+      if (fullReadOnly(it.key()))
+        switches.insert(it.key(), it.value());
+  const bool differs = s.profile != m_powerProfile || s.profiles != m_powerProfiles || s.limits != m_powerLimits ||
+                       s.chargeMode != m_chargeMode || s.chargeModes != m_chargeModes ||
+                       switches != m_switches || s.legion != m_legionModule || s.lighting != m_lightingAvailable ||
+                       (s.full && s.curve != m_fanCurve);
+  m_powerProfile = s.profile;
+  m_powerProfiles = s.profiles;
+  m_powerLimits = s.limits;
+  m_chargeMode = s.chargeMode;
+  m_chargeModes = s.chargeModes;
   m_switches = switches;
-  m_legionModule = legion;
-  m_lightingAvailable = lighting;
-  const auto curve = m_fanCurve;
-  readFanCurve();
-  if (differs || curve != m_fanCurve)
+  m_legionModule = s.legion;
+  m_lightingAvailable = s.lighting;
+  if (s.full)
+    m_fanCurve = s.curve;
+  m_battery = s.battery;
+  m_cpu = s.cpu;
+  m_gpu = s.gpu;
+  m_gpuPresent = s.gpuPresent;
+  m_gpuAsleep = s.gpuAsleep;
+  m_fans = s.fans;
+  if (differs)
     emit changed();
-  if (!previousProfile.isEmpty() && profile != previousProfile)
-    m_curveReapply.start();
-}
-
-void Machine::readFanCurve() {
-  QVariantMap curve{{"available", false}};
-  const auto hwmon = controls::legionHwmon(m_root);
-  if (hwmon) {
-    const auto text = [](const fs::path &path) { return controls::readText(path).value_or(std::string()); };
-    int size = int(controls::parseInteger(text(*hwmon / "auto_points_size")).value_or(0));
-    if (size <= 0)
-      while (size < 10 && fs::exists(*hwmon / ("pwm1_auto_point" + std::to_string(size + 1) + "_pwm")))
-        ++size;
-    QVariantList points;
-    for (int point = 1; point <= size; ++point) {
-      const auto base = "_auto_point" + std::to_string(point) + "_";
-      const auto speed = controls::parseInteger(text(*hwmon / ("pwm1" + base + "pwm")));
-      if (!speed)
-        break;
-      points.append(QVariantMap{
-          {"speed", int(*speed)},
-          {"cpu", int(controls::parseInteger(text(*hwmon / ("pwm1" + base + "temp"))).value_or(0))},
-          {"gpu", int(controls::parseInteger(text(*hwmon / ("pwm2" + base + "temp"))).value_or(0))}});
-    }
-    if (!points.isEmpty()) {
-      curve["available"] = true;
-      curve["points"] = points;
-      curve["maxRpm"] = int(controls::parseInteger(text(*hwmon / "fan1_max")).value_or(0));
-    }
-  }
-  m_fanCurve = curve;
-}
-
-void Machine::readBattery() {
-  QVariantMap battery{{"present", false}};
-  const auto bat = controls::battery(m_root);
-  if (bat) {
-    const auto number = [&](const char *name) {
-      return controls::parseInteger(controls::readText(*bat / name).value_or(""));
-    };
-    battery["present"] = true;
-    battery["percent"] = int(number("capacity").value_or(0));
-    battery["status"] = QString::fromStdString(controls::readText(*bat / "status").value_or(""));
-    // power_now is microwatts; a battery that reports current instead gives
-    // microamps and microvolts (Documentation/ABI/testing/sysfs-class-power).
-    double watts = 0;
-    if (const auto power = number("power_now"))
-      watts = *power / 1e6;
-    else if (const auto current = number("current_now"), voltage = number("voltage_now"); current && voltage)
-      watts = double(*current) * double(*voltage) / 1e12;
-    battery["watts"] = std::round(std::abs(watts) * 10) / 10;
-    auto full = number("energy_full"), design = number("energy_full_design");
-    if (!full || !design) {
-      full = number("charge_full");
-      design = number("charge_full_design");
-    }
-    if (full && design && *design > 0)
-      battery["health"] = int(std::lround(100.0 * double(*full) / double(*design)));
-    if (const auto cycles = number("cycle_count"); cycles && *cycles > 0)
-      battery["cycles"] = int(*cycles);
-  }
-  bool ac = false;
-  std::error_code error;
-  for (const auto &supply : fs::directory_iterator(m_root / "sys/class/power_supply", error))
-    if (controls::readText(supply.path() / "type").value_or("") == "Mains" &&
-        controls::readText(supply.path() / "online").value_or("0") == "1")
-      ac = true;
-  battery["ac"] = ac;
-  m_battery = battery;
-}
-
-void Machine::sample() {
-  readBattery();
-  m_sensors.sample();
   emit sampled();
+  // A mode change makes the firmware load that mode's own fan curve.
+  if (!previousProfile.isEmpty() && s.profile != previousProfile && m_legionModule)
+    m_curveReapply.start();
 }
 
 // --- Changing things ---------------------------------------------------------
@@ -386,14 +262,16 @@ void Machine::setPowerProfileThroughDaemon(const QString &profile, const QString
     QDBusPendingReply<> reply = *watcher;
     // The daemon writes platform_profile itself; this only waits for the
     // kernel to say it has.
-    setPending("platform-profile", false);
     if (reply.isError()) {
+      setPending("platform-profile", false);
       // A daemon that refuses leaves the helper, which answers to polkit
       // on its own terms.
       enqueue({"platform-profile", {"set", "platform-profile=" + profile}, tr("the power mode")});
       return;
     }
-    readControls();
+    if (!m_settling.contains("platform-profile"))
+      m_settling << "platform-profile";
+    requestRead(true);
   });
 }
 
@@ -640,9 +518,10 @@ bool Machine::runInFixture(const Request &request, QString *error) {
 
 void Machine::finish(const Request &request, bool ok, const QString &error) {
   m_running = false;
-  if (std::none_of(m_queue.cbegin(), m_queue.cend(), [&](const Request &r) { return r.key == request.key; }))
-    setPending(request.key, false);
-  readControls();
+  // The change stays pending until the kernel's answer has been read back.
+  if (!m_settling.contains(request.key))
+    m_settling << request.key;
+  requestRead(request.key == "curve" || request.key == "platform-profile" || fullReadOnly(request.key));
   if (!ok)
     emit failed(error);
   runNext();

@@ -94,7 +94,7 @@ private slots:
     // pass while it is showing.
     fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "performance\n");
     machine.setActive(true);
-    QCOMPARE(machine.powerProfile(), QString("performance"));
+    QTRY_COMPARE(machine.powerProfile(), QString("performance"));
     QVERIFY(changed.count() >= 1);
     machine.setActive(false);
   }
@@ -181,8 +181,11 @@ private slots:
     fixture::withLegion(dir.path());
     Machine machine(root(dir));
     QVERIFY(machine.legionModule());
+    // The curve is the slow read, and follows the first reading from the
+    // worker rather than holding up the window.
+    QVERIFY(!machine.fanCurve().value("available").toBool());
+    QTRY_VERIFY(machine.fanCurve().value("available").toBool());
     const auto curve = machine.fanCurve();
-    QVERIFY(curve.value("available").toBool());
     QCOMPARE(curve.value("maxRpm").toInt(), 4400);
     const auto points = curve.value("points").toList();
     QCOMPARE(points.size(), 10);
@@ -203,6 +206,8 @@ private slots:
     QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point10_pwm"), QByteArray("225"));
     // The temperatures are the firmware's and are not touched.
     QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point4_temp"), QByteArray("65"));
+    // The change stays pending until its readback lands, so the curve the
+    // window shows is already the new one when it ends.
     QCOMPARE(machine.fanCurve().value("points").toList().at(3).toMap().value("speed").toInt(), 75);
     // A curve of the wrong length is not a curve for this machine.
     machine.setFanSpeeds({1, 2, 3});
@@ -214,6 +219,7 @@ private slots:
     fixture::withLegion(dir.path());
     fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "custom\n");
     Machine machine(root(dir));
+    QTRY_VERIFY(machine.fanCurve().value("available").toBool());
     QVariantList speeds;
     for (int i = 0; i < 10; ++i)
       speeds << 100;
@@ -225,6 +231,7 @@ private slots:
     const QString hw = "sys/class/hwmon/hwmon7/";
     fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "performance\n");
     machine.refresh();
+    QTRY_COMPARE(machine.powerProfile(), QString("performance"));
     fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "custom\n");
     for (int i = 1; i <= 10; ++i)
       fixture::put(dir.path(), hw + "pwm1_auto_point" + QString::number(i) + "_pwm", "10\n");

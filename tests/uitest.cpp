@@ -6,6 +6,8 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTest>
+#include <QTimer>
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 
@@ -179,4 +181,31 @@ void runUiTest(QQuickWindow *window, const QString &out) {
 
   std::printf("%d failure%s\n", g_failures, g_failures == 1 ? "" : "s");
   QCoreApplication::exit(g_failures ? 1 : 0);
+}
+
+void runLatencyTest(QQuickWindow *window) {
+  window->setProperty("page", "fans");
+  QTest::qWait(3000); // the startup reads, including the fan curve, land first
+  QElapsedTimer clock;
+  qint64 last = 0, worst = 0;
+  QList<qint64> gaps;
+  clock.start();
+  QTimer tick;
+  tick.setTimerType(Qt::PreciseTimer);
+  tick.setInterval(4);
+  QObject::connect(&tick, &QTimer::timeout, [&] {
+    const qint64 now = clock.nsecsElapsed();
+    if (last)
+      gaps << now - last;
+    worst = std::max(worst, now - last);
+    last = now;
+  });
+  tick.start();
+  QTest::qWait(10000);
+  tick.stop();
+  std::sort(gaps.begin(), gaps.end());
+  const double p99 = gaps.isEmpty() ? 0 : gaps.at(gaps.size() * 99 / 100) / 1e6;
+  std::printf("longest stall %.1f ms, 99th percentile %.1f ms, over %lld ticks\n", worst / 1e6, p99,
+              qlonglong(gaps.size()));
+  QCoreApplication::exit(worst / 1e6 > 50 ? 1 : 0);
 }

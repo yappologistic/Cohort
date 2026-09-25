@@ -27,13 +27,14 @@ target_link_options(cohort-helper PRIVATE -pie -Wl,-z,relro,-z,now)
 # and the window runs the helper from here once installed.
 set(COHORT_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBEXECDIR}/cohort-helper")
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Svg DBus)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Concurrent Gui Quick Qml QuickControls2 Svg DBus)
 qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
 
 set(COHORT_SOURCES
  ${COHORT_RULES}
  src/sensors.cpp src/sensors.h
+ src/snapshot.cpp src/snapshot.h
  src/machine.cpp src/machine.h
  src/appearance.cpp src/appearance.h
  src/m3color.cpp src/m3color.h
@@ -44,7 +45,7 @@ qt_add_executable(cohort ${COHORT_SOURCES} src/main.cpp)
 target_include_directories(cohort PRIVATE src)
 target_compile_definitions(cohort PRIVATE COHORT_VERSION="${PROJECT_VERSION}"
                                           COHORT_HELPER_PATH="${COHORT_HELPER_PATH}")
-target_link_libraries(cohort PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::QuickControls2 Qt6::Svg Qt6::DBus ${CMAKE_DL_LIBS})
+target_link_libraries(cohort PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Quick Qt6::Qml Qt6::QuickControls2 Qt6::Svg Qt6::DBus ${CMAKE_DL_LIBS})
 target_compile_options(cohort PRIVATE -Wall -Wextra -Wpedantic "$<$<CONFIG:Release>:-Oz;-ffunction-sections;-fdata-sections>")
 target_link_options(cohort PRIVATE "$<$<CONFIG:Release>:-Oz;-Wl,--gc-sections;-Wl,-z,pack-relative-relocs>")
 set_target_properties(cohort PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
@@ -99,10 +100,11 @@ if(BUILD_TESTING)
 
  # The machine layer as the window drives it, writing into a fixture.
  qt_add_executable(cohort-machine-tests tests/machine_test.cpp tests/fixture.h
-                   ${COHORT_RULES} src/sensors.cpp src/sensors.h src/machine.cpp src/machine.h)
+                   ${COHORT_RULES} src/sensors.cpp src/sensors.h src/snapshot.cpp src/snapshot.h
+                   src/machine.cpp src/machine.h)
  target_include_directories(cohort-machine-tests PRIVATE src tests)
  target_compile_definitions(cohort-machine-tests PRIVATE COHORT_HELPER_PATH="/nonexistent")
- target_link_libraries(cohort-machine-tests PRIVATE Qt6::Core Qt6::Gui Qt6::DBus Qt6::Test ${CMAKE_DL_LIBS})
+ target_link_libraries(cohort-machine-tests PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::DBus Qt6::Test ${CMAKE_DL_LIBS})
  add_test(NAME machine COMMAND cohort-machine-tests)
  set_tests_properties(machine PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
