@@ -144,6 +144,14 @@ int main(int argc, char **argv) {
   DesktopTheme desktopTheme;
 
   QQmlApplicationEngine engine;
+  // The engine also looks for modules beside the binary, which in a build
+  // tree finds the module CMake writes there. An installed binary has only
+  // what is embedded in it, so the build tree is made to look the same: a
+  // module that only loads from disk fails here, where it can be seen, and
+  // not after installing.
+  QStringList imports = engine.importPathList();
+  imports.removeAll(QCoreApplication::applicationDirPath());
+  engine.setImportPathList(imports);
   engine.addImageProvider("symbols", new Symbols);
   engine.rootContext()->setContextProperty("app", &appearance);
   engine.rootContext()->setContextProperty("machine", &machine);

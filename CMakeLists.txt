@@ -28,6 +28,7 @@ target_link_options(cohort-helper PRIVATE -pie -Wl,-z,relro,-z,now)
 set(COHORT_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBEXECDIR}/cohort-helper")
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Svg DBus)
+qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
 
 set(COHORT_SOURCES
@@ -51,7 +52,10 @@ set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 set_target_properties(cohort PROPERTIES QT_QMLCACHEGEN_ARGUMENTS "--only-bytecode")
 
 file(GLOB COHORT_QML CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" qml/*.qml)
-qt_add_qml_module(cohort URI CohortUi VERSION 1.0 NO_PLUGIN NO_RESOURCE_TARGET_PATH RESOURCE_PREFIX "/"
+# The module is embedded where Qt looks for modules by default,
+# :/qt/qml/CohortUi (QTP0001), so the installed binary finds it with nothing
+# beside it on disk.
+qt_add_qml_module(cohort URI CohortUi VERSION 1.0 NO_PLUGIN
  QML_FILES ${COHORT_QML})
 
 file(GLOB icons CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" assets/icons/*.svg)
