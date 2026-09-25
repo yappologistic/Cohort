@@ -62,11 +62,27 @@ private slots:
     QVERIFY(machine.pending().contains("platform-profile"));
     QTRY_COMPARE(machine.powerProfile(), QString("custom"));
     QVERIFY(!machine.pending().contains("platform-profile"));
-    QCOMPARE(fixture::read(dir.path(), "sys/firmware/acpi/platform_profile"), QByteArray("custom"));
+    // Custom goes to the handler's class device; the legacy file refuses it.
+    QCOMPARE(fixture::read(dir.path(), "sys/class/platform-profile/platform-profile-0/profile"), QByteArray("custom"));
+    QCOMPARE(fixture::read(dir.path(), "sys/firmware/acpi/platform_profile"), QByteArray("balanced"));
+    // Any other mode goes to the legacy file, which sets every handler.
+    machine.setPowerProfile("performance");
+    QTRY_COMPARE(machine.powerProfile(), QString("performance"));
+    QCOMPARE(fixture::read(dir.path(), "sys/firmware/acpi/platform_profile"), QByteArray("performance"));
     // A mode the firmware does not publish is never sent.
     machine.setPowerProfile("max-power");
     QVERIFY(machine.pending().isEmpty());
-    QCOMPARE(fixture::read(dir.path(), "sys/firmware/acpi/platform_profile"), QByteArray("custom"));
+    QCOMPARE(fixture::read(dir.path(), "sys/firmware/acpi/platform_profile"), QByteArray("performance"));
+  }
+
+  void sendsCustomToTheMainlineHandler() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    Machine machine(root(dir));
+    machine.setPowerProfile("custom");
+    QTRY_COMPARE(machine.powerProfile(), QString("custom"));
+    QCOMPARE(fixture::read(dir.path(), "sys/class/platform-profile/platform-profile-0/profile"), QByteArray("custom"));
+    QCOMPARE(fixture::read(dir.path(), "sys/class/platform-profile/platform-profile-1/profile"), QByteArray("balanced"));
   }
 
   void followsAModeChangedElsewhere() {

@@ -48,6 +48,11 @@ private slots:
     QVERIFY(profile);
     QCOMPARE(profile->kind, controls::Kind::Choice);
     QCOMPARE(profile->choices.size(), size_t(4));
+    // Custom is written to the handler's own class device.
+    QCOMPARE(QString::fromStdString(controls::target(*profile, "custom").string()),
+             dir.path() + "/sys/class/platform-profile/platform-profile-0/profile");
+    QCOMPARE(QString::fromStdString(controls::target(*profile, "balanced").string()),
+             dir.path() + "/sys/firmware/acpi/platform_profile");
     const auto charge = controls::resolve(root(dir), "charge-types");
     QVERIFY(charge);
     QCOMPARE(charge->choices.size(), size_t(3));

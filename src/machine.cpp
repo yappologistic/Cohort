@@ -203,7 +203,7 @@ void Machine::readControls() {
   if (const auto control = controls::resolve(m_root, "platform-profile")) {
     for (const auto &word : control->choices)
       profiles << QString::fromStdString(word);
-    profile = QString::fromStdString(controls::parseSelected(read("sys/firmware/acpi/platform_profile")));
+    profile = QString::fromStdString(controls::currentProfile(m_root));
   }
 
   QVariantList limits;
@@ -606,9 +606,16 @@ bool Machine::runInFixture(const Request &request, QString *error) {
         for (const auto &word : control.choices)
           shown += (shown.empty() ? "" : " ") + (word == value ? "[" + word + "]" : word);
       }
-      if (controls::writeText(control.path, shown) != 0) {
+      if (controls::writeText(controls::target(control, value), shown) != 0) {
         *error = tr("The firmware did not accept %1").arg(request.what);
         return false;
+      }
+      // The legacy platform_profile sets every handler, so each handler's
+      // class device follows it, as platform_profile_store does.
+      if (control.key == "platform-profile" && value != "custom") {
+        std::error_code ignored;
+        for (const auto &handler : std::filesystem::directory_iterator(m_root / "sys/class/platform-profile", ignored))
+          controls::writeText(handler.path() / "profile", value);
       }
     }
     return true;

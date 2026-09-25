@@ -55,6 +55,11 @@ inline void mainline(const QString &root) {
 
   put(root, "sys/firmware/acpi/platform_profile", "balanced\n");
   put(root, "sys/firmware/acpi/platform_profile_choices", "low-power balanced performance custom\n");
+  // lenovo-wmi-gamezone's own handler, where custom has to be written: the
+  // legacy file refuses it (drivers/acpi/platform_profile.c).
+  put(root, "sys/class/platform-profile/platform-profile-0/name", "lenovo-wmi-gamezone\n");
+  put(root, "sys/class/platform-profile/platform-profile-0/choices", "low-power balanced performance custom\n");
+  put(root, "sys/class/platform-profile/platform-profile-0/profile", "balanced\n");
 
   put(root, "sys/class/power_supply/BAT0/type", "Battery\n");
   put(root, "sys/class/power_supply/BAT0/status", "Discharging\n");
@@ -132,6 +137,11 @@ inline void legionModule(const QString &root, const QString &device) {
 inline void withLegion(const QString &root) {
   mainline(root);
   legionModule(root, "sys/bus/platform/devices/legion");
+  // legion_laptop's own handler, which also offers custom. Custom must still
+  // go to lenovo-wmi-gamezone's.
+  put(root, "sys/class/platform-profile/platform-profile-1/name", "lenovo-legion\n");
+  put(root, "sys/class/platform-profile/platform-profile-1/choices", "low-power balanced performance custom\n");
+  put(root, "sys/class/platform-profile/platform-profile-1/profile", "balanced\n");
 
   const QString fw = "sys/class/firmware-attributes/lenovo-wmi-other-0/attributes/";
   const struct {

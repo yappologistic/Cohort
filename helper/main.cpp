@@ -75,7 +75,7 @@ int set(int argc, char **argv) {
   // In the order given: a fan curve's points are written low to high so the
   // firmware never holds a curve whose temperatures fall.
   for (const auto &write : writes)
-    if (const int error = controls::writeText(write.control.path, write.value)) {
+    if (const int error = controls::writeText(controls::target(write.control, write.value), write.value)) {
       std::fprintf(stderr, "cohort-helper: %s: %s\n", write.control.key.c_str(), std::strerror(error));
       return EX_IOERR;
     }

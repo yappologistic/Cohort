@@ -309,7 +309,29 @@ std::optional<Control> resolve(const fs::path &root, std::string_view key) {
     // The legacy file drives every registered handler at once, which is what
     // a person choosing a mode means; the class devices each drive one.
     const auto dir = root / "sys/firmware/acpi";
-    return choice(key, dir / "platform_profile", dir / "platform_profile_choices");
+    auto control = choice(key, dir / "platform_profile", dir / "platform_profile_choices");
+    if (!control)
+      return std::nullopt;
+    // Custom is one handler's, so it goes to that handler's class device
+    // (Documentation/ABI/testing/sysfs-class-platform-profile). Where more
+    // than one offers it, lenovo-wmi-gamezone is preferred: it is the
+    // mainline driver, and LenovoLegionLinux recommends leaving the power
+    // mode to it when both are loaded.
+    std::vector<fs::path> handlers;
+    std::error_code error;
+    for (const auto &entry : fs::directory_iterator(root / "sys/class/platform-profile", error)) {
+      const auto offered = parseChoices(readText(entry.path() / "choices").value_or(""));
+      if (std::find(offered.begin(), offered.end(), "custom") != offered.end())
+        handlers.push_back(entry.path());
+    }
+    std::sort(handlers.begin(), handlers.end());
+    for (const auto &handler : handlers)
+      if (readText(handler / "name").value_or("") == "lenovo-wmi-gamezone" || control->customPath.empty())
+        control->customPath = handler / "profile";
+    if (!control->customPath.empty() &&
+        std::find(control->choices.begin(), control->choices.end(), "custom") == control->choices.end())
+      control->choices.push_back("custom");
+    return control;
   }
   if (key == "charge-types") {
     const auto bat = battery(root);
@@ -395,6 +417,18 @@ std::optional<std::string> validate(const Control &control, std::string_view val
   }
   }
   return std::nullopt;
+}
+
+fs::path target(const Control &control, std::string_view value) {
+  return value == "custom" && !control.customPath.empty() ? control.customPath : control.path;
+}
+
+std::string currentProfile(const fs::path &root) {
+  std::error_code error;
+  for (const auto &entry : fs::directory_iterator(root / "sys/class/platform-profile", error))
+    if (readText(entry.path() / "profile").value_or("") == "custom")
+      return "custom";
+  return parseSelected(readText(root / "sys/firmware/acpi/platform_profile").value_or(""));
 }
 
 std::vector<std::string> knownKeys() {

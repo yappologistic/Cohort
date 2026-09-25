@@ -54,6 +54,12 @@ struct Control {
   long minimum = 0;
   long maximum = 1;
   long step = 1;
+  // Where "custom" is written, when it cannot go to `path`. The legacy
+  // /sys/firmware/acpi/platform_profile refuses custom by design
+  // (drivers/acpi/platform_profile.c, platform_profile_store), because it
+  // drives every handler at once and custom belongs to one of them; custom
+  // goes to that handler's own class device instead.
+  std::filesystem::path customPath;
 };
 
 // --- Pure parsers ------------------------------------------------------------
@@ -89,6 +95,15 @@ std::optional<Control> resolve(const std::filesystem::path &root, std::string_vi
 // does not accept it. A Toggle takes 0/1, true/false or on/off; a Choice one of
 // its words exactly; an Integer a number inside its bounds on its step.
 std::optional<std::string> validate(const Control &control, std::string_view value);
+
+// The file a validated value is written to: the control's own, except for a
+// custom platform profile, which goes to the handler that offers it.
+std::filesystem::path target(const Control &control, std::string_view value);
+
+// The platform profile the machine is in. The legacy file reads "custom" when
+// the handlers disagree; a handler that is itself in custom says so on its
+// class device, which is read first.
+std::string currentProfile(const std::filesystem::path &root);
 
 // The keys this build knows how to resolve, for the helper's usage text and for
 // discovery. Keys with a parameter are listed with it in angle brackets.

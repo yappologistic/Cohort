@@ -95,8 +95,8 @@ void runUiTest(QQuickWindow *window, const QString &out) {
   // firmware's limits, which only apply there.
   snap(window, "01-power");
   check(click(window, "profile_custom"), "the Custom mode can be clicked");
-  check(waitFor([] { return fixtureFile("sys/firmware/acpi/platform_profile").trimmed() == "custom"; }),
-        "Custom reaches platform_profile");
+  check(waitFor([] { return fixtureFile("sys/class/platform-profile/platform-profile-0/profile").trimmed() == "custom"; }),
+        "Custom reaches the gamezone handler, not the legacy file that refuses it");
   check(waitFor([&] { return find(window->contentItem(), "limit_ppt_pl1_spl") != nullptr; }),
         "the power limits appear in Custom");
   snap(window, "02-power-custom");
