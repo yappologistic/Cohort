@@ -1,9 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect x="8" y="8" width="112" height="112" rx="36" fill="#3a2a24"/>
-  <g transform="translate(64 64)" fill="#ffb596">
-    <path id="blade" d="M0 -6 C 4 -26 18 -40 34 -38 C 38 -22 24 -8 6 -2 Z"/>
-    <use href="#blade" transform="rotate(120)"/>
-    <use href="#blade" transform="rotate(240)"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb488"/>
+      <stop offset="1" stop-color="#e5602f"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="64" fill="url(#tile)"/>
+  <rect x="9" y="9" width="238" height="238" rx="63" fill="none" stroke="url(#edge)" stroke-width="2"/>
+  <g transform="translate(128 128)" fill="#2a1510">
+    <path id="blade" d="M -8 -14 C -12 -42 6 -70 30 -72 C 38 -52 28 -28 10 -12 C 4 -8 -4 -8 -8 -14 Z"/>
+    <use href="#blade" transform="rotate(90)"/>
+    <use href="#blade" transform="rotate(180)"/>
+    <use href="#blade" transform="rotate(270)"/>
+    <!-- A gap in the tile's colour at its centre sets the hub apart from the
+         blades, so the four read as a fan rather than as one shape. -->
+    <circle r="19" fill="#f28a5b"/>
+    <circle r="13"/>
   </g>
-  <circle cx="64" cy="64" r="9" fill="#ffdbcb"/>
 </svg>
