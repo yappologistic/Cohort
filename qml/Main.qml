@@ -5,8 +5,11 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: window
     objectName: "window"
-    width: 1000
-    height: 700
+    // The window opens at the size the pages are laid out for, or at what the
+    // screen can give it, whichever is smaller, so it is never larger than
+    // the screen it opens on.
+    width: Math.min(1000, Screen.desktopAvailableWidth - 64)
+    height: Math.min(760, Screen.desktopAvailableHeight - 64)
     minimumWidth: 360
     minimumHeight: 480
     visible: true

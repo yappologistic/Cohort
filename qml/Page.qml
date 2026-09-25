@@ -4,9 +4,8 @@ import QtQuick.Layouts
 
 // A destination: its headline and a column of sections under it.
 //
-// The column is held to a reading width and kept at the leading edge, as
-// Material's canonical layouts keep a single pane, and the window's margin
-// follows its size class. The headline is display small at the emphasized
+// The window's margin follows its size class, and the column its reading
+// width, below. The headline is display small at the emphasized
 // weight, the same top-level title the other apps in this family use.
 Flickable {
     id: page
@@ -21,11 +20,17 @@ Flickable {
     Accessible.role: Accessible.Pane
     Accessible.name: title
 
+    // The column is held to a reading width that grows with the window's
+    // size class: 720 while the window is medium and 840 once it is expanded
+    // (Material's window size classes, 840dp and up). Past that, the column
+    // is centred in the space beside the navigation, so a wide window frames
+    // it rather than leaving it against one edge.
+    readonly property real readingWidth: page.width >= 840 ? 840 : 720
     ColumnLayout {
         id: column
-        x: page.margin
+        width: Math.min(page.readingWidth, page.width - page.margin*2)
+        x: Math.max(page.margin, (page.width - width)/2)
         y: page.margin
-        width: Math.min(720, page.width - page.margin*2)
         spacing: Theme.spaceExtraLarge
         CohortText {
             heading: true
