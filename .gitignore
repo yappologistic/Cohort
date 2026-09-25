@@ -42,7 +42,6 @@
 !/assets/icons/*.svg
 !/assets/screenshots/
 /assets/screenshots/*
-!/assets/screenshots/cohort-fans.png
 
 !/licenses/
 /licenses/*
@@ -93,7 +92,7 @@ verify-out/
 
 # Personal media, captures, archives and key material, wherever they land.
 # The allowlist above already keeps them out; these hold even if it is
-# widened by mistake. A new README image is added by name above.
+# widened by mistake. A new README image is added by name below them.
 *.jpg
 *.jpeg
 *.gif
@@ -123,6 +122,10 @@ id_ed25519*
 .netrc
 .git-credentials
 hosts.yml
+
+# The README image, allowed by name. It sits after the denials above
+# because the last matching rule wins.
+!/assets/screenshots/cohort.webp
 
 # README is the only Markdown file in the public repository.
 *.[mM][dD]

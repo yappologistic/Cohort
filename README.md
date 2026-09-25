@@ -1,14 +1,22 @@
-<h1 align="center">Cohort</h1>
+<div align="center">
 
-<p align="center">Power, battery, fan and keyboard settings for Lenovo Legion laptops on Linux.</p>
+<img src="assets/screenshots/cohort.webp" alt="Cohort's Fans page, with temperatures, fan speeds and a ten-step fan curve" width="100%">
 
-<p align="center">
-  <img src="assets/screenshots/cohort-fans.png" alt="Cohort's Fans page, with temperatures, fan speeds and a ten-step fan curve" width="1000">
-</p>
+<a href="https://buymeacoffee.com/e_gurl">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Support Cohort on Buy Me a Coffee" width="217" height="60">
+</a>
+
+# Cohort
+
+**Power, battery, fan and keyboard settings for Lenovo Legion laptops on Linux.**
 
 Lenovo's own apps don't run on Linux. Cohort changes the same settings through the drivers Linux already has, in a native Material 3 window.
 
-**Free software (GPL-3.0-or-later).** Not made or endorsed by Lenovo.
+Free software (GPL-3.0-or-later). Not made or endorsed by Lenovo.
+
+[Install](#install) · [Fan control](#fan-control-optional) · [Troubleshooting](#troubleshooting)
+
+</div>
 
 ## Features
 
