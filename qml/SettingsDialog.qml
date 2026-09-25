@@ -49,15 +49,5 @@ MDialog {
             checked: app.motionScheme === "expressive"
             onToggled: app.motionScheme = checked ? "expressive" : "standard"
         }
-        CohortText {
-            Layout.fillWidth: true
-            Layout.topMargin: Theme.space
-            text: qsTr("Cohort %1 · %2").arg(Qt.application.version).arg(machine.model)
-                  + "\n" + qsTr("Free software under the GNU GPL, version 3 or later. Not affiliated with Lenovo.")
-            font.pixelSize: Theme.bodySmall
-            color: Theme.muted
-            wrapMode: Text.Wrap
-            elide: Text.ElideNone
-        }
     }
 }
