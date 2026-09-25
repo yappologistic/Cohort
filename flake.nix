@@ -90,6 +90,9 @@
             security.polkit.enable = true;
             boot.extraModulePackages = lib.mkIf cfg.legionModule [ config.boot.kernelPackages.lenovo-legion-module ];
             boot.kernelModules = lib.mkIf cfg.legionModule [ "legion_laptop" ];
+            # Leaves the power mode to the mainline drivers and adds the
+            # module's fan control beside them (packaging/legion_laptop.conf).
+            boot.extraModprobeConfig = lib.mkIf cfg.legionModule (builtins.readFile ./packaging/legion_laptop.conf);
           };
         };
     };

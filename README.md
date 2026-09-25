@@ -6,55 +6,40 @@
   <img src="assets/screenshots/cohort-fans.png" alt="Cohort's Fans page, with temperatures, fan speeds and a ten-step fan curve" width="1000">
 </p>
 
-<p align="center">
-  <a href="#install">Install</a> ·
-  <a href="#what-it-does">Features</a> ·
-  <a href="#what-your-laptop-needs">Requirements</a> ·
-  <a href="#troubleshooting-and-privacy">Help</a> ·
-  <a href="#license">License</a>
-</p>
+Lenovo's own apps don't run on Linux. Cohort changes the same settings through the drivers Linux already has, in a native Material 3 window.
 
-Lenovo Vantage and Legion Space do not run on Linux. Cohort changes the same settings through the drivers Linux already has, in a native Qt interface that follows Material Design 3.
+**Free software (GPL-3.0-or-later).** Not made or endorsed by Lenovo.
 
-**Free software · GPL-3.0-or-later.** Not made, endorsed or supported by Lenovo.
+## Features
 
-## What it does
+- **Power:** Quiet, Balanced, Performance, Custom (and Extreme where supported). In Custom, set the firmware's CPU and GPU power limits.
+- **Battery:** Conservation, Standard or Rapid charging, always-on USB, and battery health.
+- **Fans:** temperatures, fan speeds, your own fan curve, full-speed mode.
+- **Keyboard:** four-zone RGB lighting, Fn lock, Windows key, touchpad and logo light.
 
-- **Power:** switch between Quiet, Balanced, Performance and Custom, plus Extreme where the firmware has it. Fn+Q changes show up straight away. In Custom, set the CPU and GPU power limits the firmware publishes. Hybrid graphics and display overdrive are here too.
-- **Battery:** choose Conservation, Standard or Rapid charging. Turn on always-on USB. See charge, power draw, health and cycle count.
-- **Fans:** see CPU and GPU temperatures and fan speeds. Draw the fan curve step by step, run the fans at full speed, or hold them at their current speed.
-- **Keyboard:** set the four-zone lighting (static, breath, wave or smooth) with a colour for each zone, plus brightness, speed and direction. Toggle Fn lock, the Windows key, the touchpad and the lid logo light.
+Cohort only shows what your laptop supports, and follows your desktop's colours, theme and font.
 
-Cohort only shows controls your laptop actually has. It follows your desktop's colours (including Noctalia's palette), light or dark theme and font. Animations can be turned off in Settings.
+## Requirements
 
-## What your laptop needs
+| You need | Why | Check |
+| --- | --- | --- |
+| Linux 6.17 or newer | Power modes, charging, Fn lock | `uname -r` |
+| Qt 6.8 or newer | The window | installed by the commands below |
+| polkit | Changing settings | installed by the commands below |
+| [LenovoLegionLinux](https://github.com/johnfanv2/LenovoLegionLinux) kernel module (optional) | Fan curves, fan speeds, hybrid graphics, overdrive, Windows key, touchpad, logo light | `lsmod \| grep legion_laptop` |
 
-Cohort talks to kernel drivers, never to the firmware directly. What you see depends on which drivers your kernel has:
+Keyboard lighting works on 2020 to 2024 Legion 5, Legion 5 Pro, IdeaPad Gaming and LOQ laptops without anything extra.
 
-| Feature | Comes from |
-| --- | --- |
-| Power modes | `lenovo-wmi-gamezone` (kernel 6.17 and later) or LenovoLegionLinux |
-| Custom power limits | `lenovo-wmi-other` (kernel 6.17 and later), on laptops whose firmware supports it |
-| Conservation and Rapid charging | `ideapad-laptop` (kernel 6.17 and later; Rapid from 6.19), or LenovoLegionLinux on older kernels |
-| Always-on USB, Fn lock | `ideapad-laptop` |
-| Fan curve, full speed, hold speed | [LenovoLegionLinux](https://github.com/johnfanv2/LenovoLegionLinux)'s kernel module |
-| Hybrid graphics, overdrive, Windows key, touchpad, logo light | LenovoLegionLinux's kernel module |
-| Four-zone keyboard lighting | Built in. Works on 2020–2024 Legion 5, Legion 5 Pro, IdeaPad Gaming and LOQ keyboards |
-
-Fan curves need the LenovoLegionLinux kernel module. Check [its list of supported models](https://github.com/johnfanv2/LenovoLegionLinux#supported-models) for yours. Install the module with:
-
-- **Arch, CachyOS:** `sudo pacman -S lenovolegionlinux-dkms` on CachyOS, or `lenovolegionlinux-dkms-git` from the AUR
-- **NixOS:** set `programs.cohort.legionModule = true;` (see below)
-- **Other distributions:** follow [LenovoLegionLinux's installation guide](https://github.com/johnfanv2/LenovoLegionLinux#installation)
 
 ## Install
 
-Cohort needs Qt 6.8 or newer and polkit. It installs system-wide because polkit only reads policies from `/usr/share/polkit-1/actions`.
+Pick your distribution. Each block installs the build tools, builds Cohort and installs it. You'll be asked for your password once.
 
 <details>
 <summary><b>Arch, CachyOS, EndeavourOS, Manjaro</b></summary>
 
 ```bash
+sudo pacman -S --needed base-devel git
 git clone https://github.com/yappologistic/Cohort.git
 cd Cohort/packaging/arch
 makepkg -si
@@ -70,12 +55,10 @@ git clone https://github.com/yappologistic/Cohort.git
 cd Cohort
 ./scripts/install.sh
 ```
-
-`packaging/fedora/cohort.spec` builds an RPM instead.
 </details>
 
 <details>
-<summary><b>Debian 13, Ubuntu 25.04 and newer, Linux Mint 23</b></summary>
+<summary><b>Debian 13, Ubuntu 25.04 or newer, Linux Mint 23</b></summary>
 
 ```bash
 sudo apt install build-essential git cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-svg-dev \
@@ -86,7 +69,7 @@ cd Cohort
 ./scripts/install.sh
 ```
 
-Ubuntu 24.04 and Linux Mint 22 ship Qt 6.4, which is too old. Install Qt 6.8 or newer from Qt's online installer, then pass `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/gcc_64` to `./scripts/build.sh`.
+Ubuntu 24.04 and Mint 22 have Qt 6.4, which is too old.
 </details>
 
 <details>
@@ -114,7 +97,7 @@ cd Cohort
 <details>
 <summary><b>NixOS</b></summary>
 
-Add the flake to your system configuration:
+Add Cohort to your flake:
 
 ```nix
 {
@@ -131,72 +114,62 @@ Add the flake to your system configuration:
 }
 ```
 
-The module installs Cohort where polkit can find its policy. `legionModule` also loads the LenovoLegionLinux kernel module. `nix run github:yappologistic/Cohort` starts the window, but changing settings needs the module.
+`legionModule = true` also installs the fan control module. Leave it out if you don't want it.
 </details>
 
-<details>
-<summary><b>Any other distribution</b></summary>
+Then open **Cohort** from your app launcher.
 
-You need a C++20 compiler, CMake 3.24 or newer, Ninja, Qt 6.8 or newer (Base, Declarative with Quick Controls, Shapes and Layouts, and Svg), and polkit. Then:
+## Fan control (optional)
+
+Fan curves and the extra switches need LenovoLegionLinux's kernel module. Check that your model is in [its supported list](https://github.com/johnfanv2/LenovoLegionLinux#pushpin-confirmed-compatible-models) first.
+
+**1. Install the module.**
+
+- **CachyOS:** `sudo pacman -S lenovolegionlinux-dkms`
+- **Arch:** install `lenovolegionlinux-dkms-git` from the AUR, for example `paru -S lenovolegionlinux-dkms-git`
+- **Other distributions:** follow [LenovoLegionLinux's install guide](https://github.com/johnfanv2/LenovoLegionLinux#bulb-instructions)
+
+**2. On kernel 6.17 or newer, let it share with the built-in drivers.** From the Cohort folder:
 
 ```bash
-git clone https://github.com/yappologistic/Cohort.git
-cd Cohort
-./scripts/install.sh
+sudo install -Dm644 packaging/legion_laptop.conf /etc/modprobe.d/legion_laptop.conf
 ```
-</details>
 
-Open **Cohort** from your application menu. To remove it, run `./scripts/uninstall.sh` from the same folder, or remove the package. Settings stay in `~/.config/cohort/` until you delete them.
+This keeps power modes with the built-in drivers and adds the module's fan control beside them. Skip this step on older kernels.
 
-## How changes are made
+**3. Load it.** It loads by itself at every boot after this.
 
-The window runs as you and reads everything without special permissions. Changing a setting needs root, so the window asks `cohort-helper` to make the change through polkit.
+```bash
+sudo modprobe legion_laptop
+```
 
-- **The helper only makes a fixed set of changes.** Each change is checked against the values the driver accepts before anything is written. The helper cannot be pointed at any other file.
-- **There is usually no password prompt.** If you're at the machine in an active local session, polkit allows the change without asking, the same way power-profiles-daemon allows power mode changes. Remote and inactive sessions need an administrator.
-- **power-profiles-daemon stays in sync.** If it's running, Quiet, Balanced and Performance are set through it, so your desktop's power menu agrees with Cohort.
+## Uninstall
 
-Running Cohort from a build folder without installing it works too. Every change then asks for an administrator's password, because polkit only trusts the helper at its installed path.
+On Arch-based systems, run `sudo pacman -R cohort-git`. Everywhere else, run `./scripts/uninstall.sh` from the Cohort folder. Your settings are kept in `~/.config/cohort/`; delete that folder too if you want them gone.
 
-## Troubleshooting and privacy
+## Troubleshooting
 
-- **A page says a feature is missing:** your kernel doesn't provide that driver. See [What your laptop needs](#what-your-laptop-needs). `uname -r` shows your kernel version.
-- **The fan curve changes back after switching modes:** the firmware loads each mode's own fan curve. Cohort remembers the curve you set for each mode and puts it back while it is open.
-- **"Permission to change … was not given":** a polkit authentication agent must be running. Most desktops start one. On a bare compositor, start one, such as `polkit-gnome` or `hyprpolkitagent`.
-- **"… can only be changed in the Custom power mode":** the firmware only accepts power limits and some fan settings in Custom mode.
-- **Keyboard lighting shows the wrong colours after a reboot:** the keyboard can't report what it's showing, so Cohort shows the last colours it sent.
+- **A setting is missing:** your kernel or laptop doesn't provide it. See [Requirements](#requirements).
+- **"Permission … was not given":** you're not in an active local session, so polkit wants a password, and no authentication agent is running to ask for it. Start one, such as `hyprpolkitagent` or `polkit-gnome`.
+- **"… can only be changed in the Custom power mode":** switch to Custom first. The firmware only accepts power limits there.
+- **The fan curve resets after changing mode:** the firmware loads a curve per mode. Cohort puts yours back while it's open.
 
-Cohort makes no network connections and collects nothing. Its settings are stored in `~/.config/cohort/`.
+## Privacy and permissions
+
+Cohort makes no network connections and collects nothing.
+
+Settings are changed by a small helper, `cohort-helper`, through polkit. It can only change the settings listed in `src/controls.cpp`, and only to values the driver accepts. If you're at the laptop, polkit allows changes without a password, the same way your desktop's power menu works.
 
 ## Development
 
-<details>
-<summary>Build, test and verify</summary>
-
 ```bash
-./scripts/build.sh      # the window and the helper, into build/
-./scripts/test.sh       # unit tests, into build-tests/
-./scripts/verify.sh     # unit tests, the simulated user, and captures of every page
+./scripts/build.sh     # build into build/
+./scripts/test.sh      # unit tests
+./scripts/verify.sh    # tests, a simulated user, and screenshots of every page
 ```
 
-The tests use fixture machines: sysfs and `/dev` trees laid out file for file the way each driver lays them out. That way, every feature can be tested without the hardware. The fixtures cover:
-
-- a Legion on a mainline kernel
-- one with LenovoLegionLinux and firmware power limits
-- an older kernel
-
-The simulated user clicks and drags through the real window, then checks what the fixture's files hold. To see a fixture machine yourself:
-
-```bash
-./build-tests/cohort-fixture /tmp/legion legion
-COHORT_SYS_ROOT=/tmp/legion ./build-tests/cohort
-```
-</details>
-
-Open an issue before starting a large change.
+The tests run against fake laptops made of sysfs files, so they need no Legion hardware. Please open an issue before starting a large change.
 
 ## License
 
-Cohort is free software under the [GNU General Public License, version 3 or later](LICENSE). You may use, study, share and change it. Copies and changed versions you distribute must stay under the same license, with their source available. [NOTICE](NOTICE) lists third-party credits and the code carried over from MIT-licensed projects.
-
-Material Symbols icons keep their [Apache 2.0 license](licenses/MaterialSymbols-LICENSE.txt). Lenovo and Legion are trademarks of Lenovo, used here only to name the laptops Cohort works with. Cohort is independent of Lenovo, Google and the LenovoLegionLinux project.
+[GPL-3.0-or-later](LICENSE). Third-party credits are in [NOTICE](NOTICE). Material Symbols icons are [Apache 2.0](licenses/MaterialSymbols-LICENSE.txt). Lenovo and Legion are trademarks of Lenovo, used only to say which laptops Cohort supports.
