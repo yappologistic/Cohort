@@ -20,12 +20,14 @@ Free software (GPL-3.0-or-later). Not made or endorsed by Lenovo.
 
 ## Features
 
-- **Power:** Quiet, Balanced, Performance, Custom (and Extreme where supported). In Custom, set the firmware's CPU and GPU power limits.
+- **Power:** Quiet, Balanced, Performance, Custom (and Extreme where supported). In Custom, set the firmware's CPU and GPU power limits. Switch modes automatically when you plug in or unplug.
 - **Battery:** Conservation, Standard or Rapid charging, always-on USB, and battery health.
-- **Fans:** temperatures, fan speeds, your own fan curve, full-speed mode.
-- **Keyboard:** four-zone RGB lighting, Fn lock, Windows key, touchpad and logo light.
+- **Fans:** temperatures, fan speeds, and your own fan curve: speed, CPU, GPU and chipset thresholds, and ramp speed for every step. Reset to the firmware's curve at any time.
+- **Keyboard:** four-zone RGB lighting, backlight on and off, Fn lock, Windows key, touchpad and logo light.
+- **Stays applied:** a small background service puts your fan curve and lighting back after restarts, sleep and mode changes.
+- **Keybinds:** change modes, charging and lighting from the command line.
 
-Cohort only shows what your laptop supports, and follows your desktop's colours, theme and font.
+Cohort only shows what your laptop supports, and follows your desktop's colours, theme and font. The window adapts to its size, and Settings has four interface sizes.
 
 ## Requirements
 
@@ -151,6 +153,25 @@ This keeps power modes with the built-in drivers and adds the module's fan contr
 sudo modprobe legion_laptop
 ```
 
+## Keybinds and scripts
+
+```bash
+cohort --mode next          # cycle Quiet, Balanced, Performance, like Fn+Q
+cohort --mode performance   # or quiet, balanced, extreme, custom
+cohort --charge rapid       # or conservation, standard
+cohort --lighting off       # or static, breath, wave, smooth
+cohort --backlight high     # or off, low
+cohort --status             # mode, charging, temperatures, fans
+```
+
+For example, in Hyprland's config: `bind = SUPER, F5, exec, cohort --mode next`
+
+## Background service
+
+Cohort starts a small background service when you log in. It puts your fan curve and keyboard lighting back after restarts, sleep and mode changes, and switches the power mode when you plug in or unplug if you turned that on. It does nothing while nothing changes.
+
+Turn it off in **Settings → Run in background**. If your desktop doesn't run autostart entries, opening Cohort starts it.
+
 ## Uninstall
 
 On Arch-based systems, run `sudo pacman -R cohort-git`. Everywhere else, run `./scripts/uninstall.sh` from the Cohort folder. Your settings are kept in `~/.config/cohort/`; delete that folder too if you want them gone.
@@ -160,7 +181,7 @@ On Arch-based systems, run `sudo pacman -R cohort-git`. Everywhere else, run `./
 - **A setting is missing:** your kernel or laptop doesn't provide it. See [Requirements](#requirements).
 - **"Permission … was not given":** you're not in an active local session, so polkit wants a password, and no authentication agent is running to ask for it. Start one, such as `hyprpolkitagent` or `polkit-gnome`.
 - **"… can only be changed in the Custom power mode":** switch to Custom first. The firmware only accepts power limits there.
-- **The fan curve resets after changing mode:** the firmware loads a curve per mode. Cohort puts yours back while it's open.
+- **The fan curve resets after changing mode:** the firmware loads a curve per mode. Cohort puts yours back as long as the background service is on (Settings → Run in background).
 
 ## Privacy and permissions
 
