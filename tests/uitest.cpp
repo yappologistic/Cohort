@@ -54,6 +54,25 @@ void snap(QQuickWindow *window, const QString &name) {
   window->grabWindow().save(g_out + "/" + name + ".png");
 }
 
+// Scrolls whatever page holds the item until the item is in view, as a
+// person scrolls to what they want to press.
+void reveal(QQuickItem *item) {
+  for (QQuickItem *up = item->parentItem(); up; up = up->parentItem()) {
+    if (!up->inherits("QQuickFlickable"))
+      continue;
+    auto *content = up->property("contentItem").value<QQuickItem *>();
+    const QPointF at = item->mapToItem(content, QPointF(0, 0));
+    const double view = up->height();
+    const double y = up->property("contentY").toDouble();
+    if (at.y() < y || at.y() + item->height() > y + view) {
+      const double target = qBound(0.0, at.y() - view / 3, qMax(0.0, up->property("contentHeight").toDouble() - view));
+      up->setProperty("contentY", target);
+      QTest::qWait(50);
+    }
+    return;
+  }
+}
+
 QPoint centre(QQuickItem *item) {
   return item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint();
 }
@@ -65,6 +84,7 @@ bool click(QQuickWindow *window, const QString &name) {
     std::printf("      no visible item named %s\n", qPrintable(name));
     return false;
   }
+  reveal(item);
   QTest::mouseClick(window, Qt::LeftButton, {}, centre(item));
   return true;
 }
@@ -74,6 +94,7 @@ bool drag(QQuickWindow *window, const QString &name, QPoint by) {
   auto *item = find(window->contentItem(), name);
   if (!item)
     return false;
+  reveal(item);
   auto *handle = item->property("handle").value<QQuickItem *>();
   const QPoint from = handle ? centre(handle) : centre(item);
   QTest::mousePress(window, Qt::LeftButton, {}, from);
@@ -108,6 +129,13 @@ void runUiTest(QQuickWindow *window, const QString &out) {
   check(waitFor([&] { return fixtureFile(pl1) != before; }), "a dragged limit reaches current_value");
   check(fixtureFile(pl1).trimmed().toInt() > before.trimmed().toInt(), "dragging right raised the limit");
 
+  // The automatic mode: on battery, turning it on moves to the battery mode.
+  check(click(window, "automaticSwitch"), "Follow the charger can be turned on");
+  check(waitFor([] { return fixtureFile("sys/firmware/acpi/platform_profile").trimmed() == "low-power"; }),
+        "on battery it moves to the battery mode");
+  check(find(window->contentItem(), "automaticBattery") != nullptr, "the two modes to follow can be chosen");
+  snap(window, "02b-power-automatic");
+
   // Battery, reached by the rail.
   check(click(window, "rail_battery"), "the rail reaches Battery");
   check(waitFor([&] { return find(window->contentItem(), "charge_Long_Life") != nullptr; }), "Battery is showing");
@@ -131,6 +159,26 @@ void runUiTest(QQuickWindow *window, const QString &out) {
   check(fixtureFile(point).trimmed().toInt() > speed.trimmed().toInt(), "dragging up raised the speed");
   snap(window, "04-fans");
 
+  // A step's own thresholds, through its temperature.
+  const QString threshold = "sys/class/hwmon/hwmon7/pwm1_auto_point3_temp";
+  const QByteArray thresholdBefore = fixtureFile(threshold);
+  check(click(window, "curveStep3"), "a step's temperature opens it");
+  check(waitFor([&] { return find(window->contentItem(), "step_cpu") != nullptr; }), "the step editor is showing");
+  snap(window, "04b-fans-step");
+  check(drag(window, "step_cpu", QPoint(60, 0)), "the CPU threshold can be dragged");
+  check(click(window, "stepDialog_button_0"), "Save can be pressed");
+  check(waitFor([&] { return fixtureFile(threshold).trimmed().toInt() > thresholdBefore.trimmed().toInt(); }),
+        "a raised threshold reaches pwm1_auto_point3_temp");
+  // The dialog closes before the page under it can be pressed again, as for
+  // a person: its scrim holds the pointer until then.
+  check(waitFor([&] { return find(window->contentItem(), "step_cpu") == nullptr; }), "the step editor closes");
+  // Reset takes the curve back to the firmware's.
+  const QByteArray firmwareSpeed = "46";
+  check(waitFor([&] { return find(window->contentItem(), "sectionAction") != nullptr; }), "Reset appears once the curve is changed");
+  check(click(window, "sectionAction"), "Reset can be pressed");
+  check(waitFor([&] { return fixtureFile(point).trimmed() == firmwareSpeed && fixtureFile(threshold) == thresholdBefore; }),
+        "Reset puts the firmware's curve back");
+
   // Keyboard: an effect, then a colour on two zones only.
   check(click(window, "rail_keyboard"), "the rail reaches Keyboard");
   check(waitFor([&] { return find(window->contentItem(), "effect_breath") != nullptr; }), "Keyboard is showing");
@@ -148,6 +196,9 @@ void runUiTest(QQuickWindow *window, const QString &out) {
         "red lands on the chosen zones only");
   check(fixtureFile("dev/hidraw1").isEmpty(), "nothing is sent to the keyboard's other interface");
   snap(window, "05-keyboard");
+  check(click(window, "effect_off"), "Off can be clicked");
+  check(waitFor([] { return fixtureFile("sys/class/leds/platform::kbd_backlight/brightness").trimmed() == "0"; }),
+        "Off turns the keyboard backlight off, as Fn+Space does");
   check(click(window, "switch_legion/winkey"), "the Windows key switch can be clicked");
   check(waitFor([] { return fixtureFile("sys/bus/platform/devices/legion/winkey").trimmed() == "0"; }),
         "the Windows key switch reaches winkey");
@@ -174,6 +225,10 @@ void runUiTest(QQuickWindow *window, const QString &out) {
   check(waitFor([&] { return find(window->contentItem(), "theme_light") != nullptr; }),
         "Settings shows the theme choice");
   snap(window, "07-settings");
+  check(click(window, "size_large"), "a larger size can be chosen");
+  check(waitFor([&] { return find(window->contentItem(), "reopenButton") != nullptr; }),
+        "a new size offers to reopen");
+  check(find(window->contentItem(), "backgroundSwitch") != nullptr, "Run in background is in Settings");
   check(click(window, "theme_light"), "Light can be chosen");
   check(waitFor([&] { return window->color().lightnessF() > 0.9; }), "the window turns light");
   QTest::keyClick(window, Qt::Key_Escape);

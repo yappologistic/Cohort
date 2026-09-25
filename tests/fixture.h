@@ -43,6 +43,13 @@ inline QByteArray readRaw(const QString &root, const QString &path) {
   return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
 }
 
+// One byte of a file, or -1 where the file is shorter, so a wait on a report
+// that has not been sent yet reads as not there rather than as a crash.
+inline int byteAt(const QString &root, const QString &path, int index) {
+  const auto bytes = readRaw(root, path);
+  return index < bytes.size() ? quint8(bytes[index]) : -1;
+}
+
 // The start of the ITE controller's lighting interface report descriptor as
 // this laptop reports it: Usage Page (0xFF89), Usage (0x10), Collection.
 inline QByteArray lightingDescriptor() { return QByteArray::fromHex("0689ff0910a101855a0901"); }
@@ -162,6 +169,9 @@ inline void withLegion(const QString &root) {
 
   put(root, "sys/class/leds/platform::ylogo/brightness", "0\n");
   put(root, "sys/class/leds/platform::ylogo/max_brightness", "1\n");
+  // The keyboard backlight legion_laptop publishes, which Fn+Space moves.
+  put(root, "sys/class/leds/platform::kbd_backlight/brightness", "2\n");
+  put(root, "sys/class/leds/platform::kbd_backlight/max_brightness", "2\n");
 }
 
 inline void olderKernel(const QString &root) {

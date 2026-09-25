@@ -12,18 +12,32 @@ import QtQuick.Layouts
 ColumnLayout {
     id: section
     property string label: ""
+    // An action on the whole section, set at the end of its label as a text
+    // button, the way a list subheader carries one.
+    property string actionText: ""
+    signal action()
     default property alias content: rows.data
     Layout.fillWidth: true
     spacing: Theme.space
-    CohortText {
+    RowLayout {
         visible: section.label.length > 0
-        heading: true
-        text: section.label
-        font.pixelSize: Theme.titleSmall
-        typeRole: "titleSmall"
-        color: Theme.primary
-        Layout.leftMargin: Theme.listLeadingSpace
         Layout.fillWidth: true
+        Layout.leftMargin: Theme.listLeadingSpace
+        CohortText {
+            heading: true
+            text: section.label
+            font.pixelSize: Theme.titleSmall
+            typeRole: "titleSmall"
+            color: Theme.primary
+            Layout.fillWidth: true
+        }
+        MButton {
+            objectName: "sectionAction"
+            visible: section.actionText.length > 0
+            size: "xsmall"
+            text: section.actionText
+            onClicked: section.action()
+        }
     }
     ColumnLayout {
         id: rows

@@ -74,7 +74,28 @@ class Machine : public QObject {
   // step, in degrees Celsius.
   Q_PROPERTY(QVariantMap fanCurve READ fanCurve NOTIFY changed)
 
+  // Whether the curve on screen is one Cohort set for this power mode, which
+  // Reset can take back to the firmware's own.
+  Q_PROPERTY(bool fanCurveCustomized READ fanCurveCustomized NOTIFY changed)
+
+  // --- Automatic power mode ---------------------------------------------------
+  // One power mode while the charger is in and another on battery.
+  Q_PROPERTY(bool automatic READ automatic WRITE setAutomatic NOTIFY automationChanged)
+  Q_PROPERTY(QString automaticAc READ automaticAc WRITE setAutomaticAc NOTIFY automationChanged)
+  Q_PROPERTY(QString automaticBattery READ automaticBattery WRITE setAutomaticBattery NOTIFY automationChanged)
+
+  // --- Background -------------------------------------------------------------
+  // Whether cohort --background keeps the settings applied while the window
+  // is closed: the fan curve and lighting after a restart, after sleep and
+  // after a mode change, and the automatic power mode.
+  Q_PROPERTY(bool background READ background WRITE setBackground NOTIFY backgroundChanged)
+
   // --- Keyboard -------------------------------------------------------------
+  // The keyboard backlight's level, 0 for off, and its top, where
+  // legion_laptop publishes the backlight (-1 where it does not). Fn+Space
+  // moves the same level.
+  Q_PROPERTY(int backlight READ backlight NOTIFY changed)
+  Q_PROPERTY(int backlightMax READ backlightMax NOTIFY changed)
   Q_PROPERTY(bool lightingAvailable READ lightingAvailable NOTIFY changed)
   // {effect, speed, brightness, direction, zones: [4 x "#rrggbb"]}. The
   // keyboard cannot be asked what it shows, so this is what Cohort last sent.
@@ -111,6 +132,29 @@ public:
   bool lightingAvailable() const { return m_lightingAvailable; }
   QVariantMap lighting() const { return m_lighting; }
   QStringList pending() const { return m_pending; }
+  bool fanCurveCustomized() const;
+  bool automatic() const;
+  void setAutomatic(bool on);
+  QString automaticAc() const;
+  void setAutomaticAc(const QString &profile);
+  QString automaticBattery() const;
+  void setAutomaticBattery(const QString &profile);
+  bool background() const;
+  void setBackground(bool on);
+  int backlight() const { return m_backlight; }
+  int backlightMax() const { return m_backlightMax; }
+
+  // Whether this instance is the one that keeps settings applied: puts the
+  // fan curve back after a mode change, follows the charger for the
+  // automatic power mode, and restores after sleep. The background agent is
+  // that instance when it runs; otherwise the window is.
+  void setRestoring(bool restoring);
+  bool restoring() const { return m_restoring; }
+  // Whether a change or a reading is still under way, for callers that wait
+  // for the machine to be still, like the commands.
+  bool settling() const {
+    return !m_pending.isEmpty() || m_reading.isRunning() || m_wanted.read || m_running || m_lightingDebounce.isActive();
+  }
 
   Q_INVOKABLE void refresh();
   Q_INVOKABLE void setPowerProfile(const QString &profile);
@@ -120,6 +164,18 @@ public:
   // Fan speeds for each point of the curve, on the PWM scale. Both fans take
   // the same speeds; the firmware scales each to its own maximum.
   Q_INVOKABLE void setFanSpeeds(const QVariantList &speeds);
+  // A whole curve, one map per step as fanCurve publishes it. The firmware's
+  // rules are enforced before anything is sent: upper temperatures rise from
+  // step to step and the last is 127, each lower temperature keeps the gap it
+  // had below the step before, and ramp times stay between 2 and 5.
+  Q_INVOKABLE void setFanCurve(const QVariantList &points);
+  // Puts back the curve the firmware had for this power mode before Cohort
+  // first changed it, and stops restoring a custom one.
+  Q_INVOKABLE void resetFanCurve();
+  Q_INVOKABLE void setBacklight(int level);
+  // Everything a restart or sleep may have undone: the lighting, the fan
+  // curve for the mode the machine is in, and the automatic power mode.
+  Q_INVOKABLE void restore();
   Q_INVOKABLE void setLighting(const QVariantMap &lighting);
 
 signals:
@@ -128,8 +184,16 @@ signals:
   void sampled();
   void lightingChanged();
   void pendingChanged();
+  void automationChanged();
+  void backgroundChanged();
   // Something the person asked for did not happen, in words they can act on.
   void failed(const QString &message);
+
+private slots:
+  // UPower's PropertiesChanged, which fires when the charger comes or goes.
+  void powerSourceChanged();
+  // logind's PrepareForSleep: true on the way down, false on the way back.
+  void preparingForSleep(bool start);
 
 private:
   struct Request {
@@ -149,6 +213,11 @@ private:
   void setPending(const QString &key, bool on);
   void setPowerProfileThroughDaemon(const QString &profile, const QString &daemonProfile);
   void reapplyFanCurve();
+  void writeCurve(const QVariantList &points);
+  QVariantList normalisedCurve(const QVariantList &points) const;
+  void restoreLighting();
+  void applyAutomatic();
+  void sendLighting();
   std::string read(const std::filesystem::path &relative) const;
   QString helperPath() const;
 
@@ -171,6 +240,12 @@ private:
   bool m_lightingAvailable = false;
   QVariantMap m_lighting;
   QStringList m_pending;
+  int m_backlight = -1;
+  int m_backlightMax = -1;
+  bool m_restoring = false;
+  bool m_restoreAfterRead = false;
+  QTimer m_resume;
+  QTimer m_powerPoll;
 
   double m_cpu = 0;
   double m_gpu = 0;

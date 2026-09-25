@@ -44,13 +44,25 @@ Page {
     Section {
         visible: machine.fanCurve.available === true
         label: qsTr("Curve")
-        FanCurve { objectName: "fanCurve" }
+        // Reset takes a curve Cohort set back to the one the firmware had
+        // for this mode, and only appears once there is one to take back.
+        actionText: machine.fanCurveCustomized ? qsTr("Reset") : ""
+        onAction: machine.resetFanCurve()
+        FanCurve {
+            objectName: "fanCurve"
+            onStepChosen: index => stepDialog.openFor(index)
+        }
     }
 
     Section {
-        readonly property bool any: machine.switches["legion/fan_fullspeed"] !== undefined
-                                    || machine.switches["legion/lockfancontroller"] !== undefined
+        readonly property bool any: ["curve/minifancurve", "legion/fan_fullspeed", "legion/lockfancontroller"]
+                                    .some(k => machine.switches[k] !== undefined)
         visible: any
+        SwitchRow {
+            key: "curve/minifancurve"
+            headline: qsTr("Quiet when cool")
+            supporting: qsTr("Uses a gentler curve while the laptop is cold")
+        }
         SwitchRow {
             key: "legion/fan_fullspeed"
             headline: qsTr("Full speed")
@@ -72,6 +84,8 @@ Page {
         headline: qsTr("Fan curves need LenovoLegionLinux")
         supporting: qsTr("Install its kernel module to choose how the fans respond to temperature.")
         actionText: qsTr("Learn how")
-        onAction: Qt.openUrlExternally("https://github.com/johnfanv2/LenovoLegionLinux#installation")
+        onAction: Qt.openUrlExternally("https://github.com/johnfanv2/LenovoLegionLinux#bulb-instructions")
     }
+
+    StepDialog { id: stepDialog }
 }

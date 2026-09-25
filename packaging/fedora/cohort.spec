@@ -36,6 +36,7 @@ four-zone keyboard lighting. Cohort is not made or endorsed by Lenovo.
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.yappologistic.Cohort.desktop
+%{_sysconfdir}/xdg/autostart/io.github.yappologistic.Cohort.Agent.desktop
 appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.github.yappologistic.Cohort.metainfo.xml
 
 %files
@@ -44,6 +45,7 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.github.yapp
 %{_libexecdir}/cohort-helper
 %{_datadir}/polkit-1/actions/io.github.yappologistic.Cohort.policy
 %{_datadir}/applications/io.github.yappologistic.Cohort.desktop
+%{_sysconfdir}/xdg/autostart/io.github.yappologistic.Cohort.Agent.desktop
 %{_metainfodir}/io.github.yappologistic.Cohort.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/io.github.yappologistic.Cohort.svg
 

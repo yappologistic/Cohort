@@ -219,6 +219,7 @@ private slots:
     fixture::withLegion(dir.path());
     fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "custom\n");
     Machine machine(root(dir));
+    machine.setRestoring(true);
     QTRY_VERIFY(machine.fanCurve().value("available").toBool());
     QVariantList speeds;
     for (int i = 0; i < 10; ++i)
@@ -237,6 +238,167 @@ private slots:
       fixture::put(dir.path(), hw + "pwm1_auto_point" + QString::number(i) + "_pwm", "10\n");
     machine.refresh();
     QTRY_COMPARE_WITH_TIMEOUT(fixture::read(dir.path(), hw + "pwm1_auto_point5_pwm"), QByteArray("100"), 4000);
+  }
+
+  void editsTheWholeCurveWithinTheFirmwaresRules() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    Machine machine(root(dir));
+    QTRY_VERIFY(machine.fanCurve().value("available").toBool());
+    auto points = machine.fanCurve().value("points").toList();
+    const QString hw = "sys/class/hwmon/hwmon7/";
+    // Step 3 gets a higher CPU threshold and a slower ramp; step 5 asks for
+    // a CPU threshold below step 4's, which the firmware would refuse; the
+    // last step asks to end below the top of the scale.
+    auto step3 = points[2].toMap();
+    step3["cpu"] = 58;
+    step3["accel"] = 9;
+    points[2] = step3;
+    auto step5 = points[4].toMap();
+    step5["cpu"] = 40;
+    points[4] = step5;
+    auto last = points[9].toMap();
+    last["cpu"] = 100;
+    points[9] = last;
+    machine.setFanCurve(points);
+    QTRY_VERIFY(machine.pending().isEmpty());
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point3_temp"), QByteArray("58"));
+    // Ramp times stay between 2 and 5.
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point3_accel"), QByteArray("5"));
+    // Step 4's lower temperature keeps the 3 degree gap it had below step 3.
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point4_temp_hyst"), QByteArray("55"));
+    // Step 5 is raised to step 4's threshold rather than falling below it.
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point5_temp"), QByteArray("65"));
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point10_temp"), QByteArray("127"));
+    // The GPU and chipset thresholds nobody touched are written back as they
+    // were.
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm2_auto_point3_temp"), QByteArray("60"));
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm3_auto_point6_temp"), QByteArray("75"));
+    QVERIFY(machine.fanCurveCustomized());
+  }
+
+  void resetsToTheFirmwaresCurve() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    Machine machine(root(dir));
+    QTRY_VERIFY(machine.fanCurve().value("available").toBool());
+    const QString speed = "sys/class/hwmon/hwmon7/pwm1_auto_point6_pwm";
+    const QByteArray firmware = fixture::read(dir.path(), speed);
+    QVariantList speeds;
+    for (int i = 0; i < 10; ++i)
+      speeds << 200;
+    machine.setFanSpeeds(speeds);
+    QTRY_VERIFY(machine.pending().isEmpty());
+    QCOMPARE(fixture::read(dir.path(), speed), QByteArray("200"));
+    // A second edit does not overwrite the firmware curve kept for Reset.
+    speeds[5] = 150;
+    machine.setFanSpeeds(speeds);
+    QTRY_VERIFY(machine.pending().isEmpty());
+    machine.resetFanCurve();
+    QTRY_COMPARE(fixture::read(dir.path(), speed), firmware);
+    QTRY_VERIFY(machine.pending().isEmpty());
+    QVERIFY(!machine.fanCurveCustomized());
+  }
+
+  void leavesTheCurveToWhicheverInstanceRestores() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "custom\n");
+    // A window open beside the background agent does not restore; the agent
+    // does. Two of them would write every curve twice.
+    Machine window(root(dir));
+    QTRY_VERIFY(window.fanCurve().value("available").toBool());
+    QVariantList speeds;
+    for (int i = 0; i < 10; ++i)
+      speeds << 100;
+    window.setFanSpeeds(speeds);
+    QTRY_VERIFY(window.pending().isEmpty());
+    const QString hw = "sys/class/hwmon/hwmon7/";
+    fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "performance\n");
+    window.refresh();
+    QTRY_COMPARE(window.powerProfile(), QString("performance"));
+    fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", "custom\n");
+    for (int i = 1; i <= 10; ++i)
+      fixture::put(dir.path(), hw + "pwm1_auto_point" + QString::number(i) + "_pwm", "10\n");
+    window.refresh();
+    QTRY_COMPARE(window.powerProfile(), QString("custom"));
+    QTest::qWait(2500);
+    QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point5_pwm"), QByteArray("10"));
+  }
+
+  void turnsTheBacklightOffAndBackOn() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    Machine machine(root(dir));
+    QTRY_COMPARE(machine.backlight(), 2);
+    QCOMPARE(machine.backlightMax(), 2);
+    const QString led = "sys/class/leds/platform::kbd_backlight/brightness";
+    machine.setLighting({{"effect", "wave"}});
+    QTRY_COMPARE(fixture::byteAt(dir.path(), "dev/hidraw0", 2), 0x04);
+    QTRY_VERIFY(machine.pending().isEmpty());
+    // Off is the backlight off, as Fn+Space does it, and the effect chosen
+    // is kept.
+    machine.setLighting({{"effect", "off"}});
+    QTRY_COMPARE(fixture::read(dir.path(), led), QByteArray("0"));
+    QTRY_COMPARE(machine.backlight(), 0);
+    QCOMPARE(machine.lighting().value("effect").toString(), QString("wave"));
+    // Choosing an effect brings the backlight back at the chosen brightness.
+    machine.setLighting({{"effect", "breath"}});
+    QTRY_COMPARE(fixture::read(dir.path(), led), QByteArray("2"));
+    QTRY_COMPARE(fixture::byteAt(dir.path(), "dev/hidraw0", 2), 0x03);
+    QTRY_VERIFY(machine.pending().isEmpty());
+    // Brightness moves the backlight's level as well as the report's.
+    machine.setLighting({{"brightness", 1}});
+    QTRY_COMPARE(fixture::read(dir.path(), led), QByteArray("1"));
+  }
+
+  void switchesModeWithTheCharger() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    Machine machine(root(dir));
+    machine.setRestoring(true);
+    QTRY_VERIFY(machine.battery().contains("ac"));
+    machine.setAutomaticAc("performance");
+    machine.setAutomaticBattery("low-power");
+    machine.setAutomatic(true);
+    // On battery when it is turned on, so it goes to the battery mode.
+    QTRY_COMPARE(machine.powerProfile(), QString("low-power"));
+    fixture::put(dir.path(), "sys/class/power_supply/ADP0/online", "1\n");
+    machine.refresh();
+    QTRY_COMPARE(machine.powerProfile(), QString("performance"));
+    // Turned off, the charger no longer moves the mode.
+    machine.setAutomatic(false);
+    fixture::put(dir.path(), "sys/class/power_supply/ADP0/online", "0\n");
+    machine.refresh();
+    QTRY_VERIFY(!machine.battery().value("ac").toBool());
+    QTest::qWait(300);
+    QCOMPARE(machine.powerProfile(), QString("performance"));
+  }
+
+  void restoresLightingChosenBefore() {
+    QTemporaryDir dir;
+    fixture::mainline(dir.path());
+    {
+      Machine first(root(dir));
+      first.setLighting({{"effect", "smooth"}});
+      QTRY_COMPARE(fixture::readRaw(dir.path(), "dev/hidraw0").size(), 33);
+      QTRY_VERIFY(first.pending().isEmpty());
+    }
+    // A restart: the keyboard has lost it, and restore() puts it back.
+    fixture::put(dir.path(), "dev/hidraw0", "");
+    Machine again(root(dir));
+    again.setRestoring(true);
+    again.restore();
+    QTRY_COMPARE(fixture::readRaw(dir.path(), "dev/hidraw0").size(), 33);
+    QCOMPARE(quint8(fixture::readRaw(dir.path(), "dev/hidraw0")[2]), quint8(0x06));
+    // Lighting nobody chose is not sent.
+    QSettings().remove("lighting/set");
+    fixture::put(dir.path(), "dev/hidraw0", "");
+    Machine untouched(root(dir));
+    untouched.setRestoring(true);
+    untouched.restore();
+    QTest::qWait(600);
+    QCOMPARE(fixture::readRaw(dir.path(), "dev/hidraw0").size(), 0);
   }
 
   void sendsTheLightingItWasAskedFor() {

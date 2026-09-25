@@ -17,6 +17,7 @@ Rectangle {
     readonly property var points: machine.fanCurve.points || []
     readonly property int maxRpm: machine.fanCurve.maxRpm || 0
     readonly property bool busy: machine.pending.indexOf("curve") >= 0
+    signal stepChosen(int index)
     Layout.fillWidth: true
     implicitHeight: body.implicitHeight + 32
     radius: Theme.listOuter
@@ -24,9 +25,16 @@ Rectangle {
     Accessible.role: Accessible.Grouping
     Accessible.name: qsTr("Fan curve")
 
+    // A step's column narrows with the window. Below this, a speed like
+    // "1,800" is wider than its column, so it is written in thousands.
+    readonly property bool narrow: width < 560
     function speedText(pwm) {
-        if (maxRpm > 0)
-            return (Math.round(pwm/255*maxRpm/100)*100).toLocaleString(Qt.locale(), "f", 0)
+        if (maxRpm > 0) {
+            const rpm = Math.round(pwm/255*maxRpm/100)*100
+            if (narrow && rpm >= 1000)
+                return qsTr("%1k").arg((rpm/1000).toLocaleString(Qt.locale(), "f", 1))
+            return rpm.toLocaleString(Qt.locale(), "f", 0)
+        }
         return qsTr("%1%").arg(Math.round(pwm/255*100))
     }
     function commit() {
@@ -79,6 +87,10 @@ Rectangle {
                         id: slider
                         objectName: "curvePoint" + (step.index + 1)
                         Layout.alignment: Qt.AlignHCenter
+                        // The handle bar is 44dp across, and a narrow
+                        // window's columns can be narrower; it gives way
+                        // rather than overlap the next step's.
+                        handleLength: Math.min(Theme.sliderHandleHeight.xsmall, step.width - 4)
                         Layout.preferredHeight: 200
                         from: 0; to: 255; stepSize: 1
                         value: step.modelData.speed
@@ -86,15 +98,22 @@ Rectangle {
                         onPressedChanged: if (!pressed) curve.commit()
                         Keys.onReleased: event => { if (!event.isAutoRepeat) curve.commit() }
                     }
-                    CohortText {
-                        objectName: "curveTemperature"
+                    // The step's CPU threshold, and the way into the rest of
+                    // the step: an extra small text button, which keeps the
+                    // 48dp target Material asks for around a small label.
+                    MButton {
+                        objectName: "curveStep" + (step.index + 1)
                         Layout.alignment: Qt.AlignHCenter
+                        size: "xsmall"
+                        contentInset: 4
+                        labelSize: Theme.labelMedium
+                        labelTypeRole: "labelMedium"
+                        ink: Theme.muted
                         // The last step runs to the end of the scale; the
                         // firmware requires its upper temperature to be 127.
                         text: step.modelData.cpu >= 127 ? qsTr("Max") : qsTr("%1°").arg(step.modelData.cpu)
-                        font.pixelSize: Theme.labelMedium
-                        labelRole: true
-                        color: Theme.muted
+                        tip: qsTr("Edit step %1").arg(step.index + 1)
+                        onClicked: curve.stepChosen(step.index)
                     }
                 }
             }

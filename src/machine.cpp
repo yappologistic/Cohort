@@ -85,19 +85,14 @@ Machine::Machine(fs::path root, QObject *parent)
   // A colour dragged across a picker sends one report when it rests, not one
   // per frame, and each report is a process under pkexec.
   m_lightingDebounce.setInterval(150);
-  connect(&m_lightingDebounce, &QTimer::timeout, this, [this] {
-    const bool off = m_lighting.value("effect").toString() == "off";
-    QStringList arguments{"lighting", off ? "static" : m_lighting.value("effect").toString(),
-                          QString::number(m_lighting.value("speed").toInt()),
-                          QString::number(m_lighting.value("brightness").toInt()),
-                          m_lighting.value("effect").toString() == "wave" ? m_lighting.value("direction").toString()
-                                                                          : QStringLiteral("none")};
-    // Off is static black: the protocol has no off of its own, and the
-    // colours chosen stay stored for when it comes back on.
-    for (const auto &zone : m_lighting.value("zones").toList())
-      arguments << (off ? QStringLiteral("000000") : colourWord(zone));
-    enqueue({"lighting", arguments, tr("the keyboard lighting")});
-  });
+  connect(&m_lightingDebounce, &QTimer::timeout, this, &Machine::sendLighting);
+  // The firmware needs a moment after resuming before the embedded
+  // controller answers, as it does after a mode change.
+  m_resume.setSingleShot(true);
+  m_resume.setInterval(2000);
+  connect(&m_resume, &QTimer::timeout, this, &Machine::restore);
+  m_powerPoll.setInterval(10000);
+  connect(&m_powerPoll, &QTimer::timeout, this, [this] { requestRead(false); });
   // legiond waits a second and a half after a mode change before it writes
   // its curve, because the firmware loads the mode's own curve first
   // (LenovoLegionLinux extra/service/legiond). Writing sooner is overwritten.
@@ -117,6 +112,11 @@ Machine::Machine(fs::path root, QObject *parent)
     m_settlingInFlight.clear();
     if (done.reapply)
       reapplyFanCurve();
+    if (m_restoreAfterRead && done.full) {
+      m_restoreAfterRead = false;
+      restoreLighting();
+      applyAutomatic();
+    }
     if (m_wanted.read)
       requestRead(m_wanted.full, m_wanted.reapply, m_wanted.rediscover);
   });
@@ -210,7 +210,7 @@ void Machine::apply(const Snapshot &s) {
     for (auto it = m_switches.cbegin(); it != m_switches.cend(); ++it)
       if (fullReadOnly(it.key()))
         switches.insert(it.key(), it.value());
-  const bool differs = s.profile != m_powerProfile || s.profiles != m_powerProfiles || s.limits != m_powerLimits ||
+  bool differs = s.profile != m_powerProfile || s.profiles != m_powerProfiles || s.limits != m_powerLimits ||
                        s.chargeMode != m_chargeMode || s.chargeModes != m_chargeModes ||
                        switches != m_switches || s.legion != m_legionModule || s.lighting != m_lightingAvailable ||
                        (s.full && s.curve != m_fanCurve);
@@ -222,8 +222,14 @@ void Machine::apply(const Snapshot &s) {
   m_switches = switches;
   m_legionModule = s.legion;
   m_lightingAvailable = s.lighting;
-  if (s.full)
+  const bool wasOnCharger = m_battery.value("ac").toBool();
+  const bool knewCharger = m_battery.contains("ac");
+  if (s.full) {
     m_fanCurve = s.curve;
+    differs = differs || s.backlight != m_backlight || s.backlightMax != m_backlightMax;
+    m_backlight = s.backlight;
+    m_backlightMax = s.backlightMax;
+  }
   m_battery = s.battery;
   m_cpu = s.cpu;
   m_gpu = s.gpu;
@@ -233,9 +239,13 @@ void Machine::apply(const Snapshot &s) {
   if (differs)
     emit changed();
   emit sampled();
+  if (!m_restoring)
+    return;
   // A mode change makes the firmware load that mode's own fan curve.
   if (!previousProfile.isEmpty() && s.profile != previousProfile && m_legionModule)
     m_curveReapply.start();
+  if (knewCharger && wasOnCharger != m_battery.value("ac").toBool())
+    applyAutomatic();
 }
 
 // --- Changing things ---------------------------------------------------------
@@ -321,46 +331,144 @@ void Machine::setPowerLimit(const QString &key, int value) {
 }
 
 void Machine::setFanSpeeds(const QVariantList &speeds) {
-  const auto points = m_fanCurve.value("points").toList();
+  auto points = m_fanCurve.value("points").toList();
   if (!m_fanCurve.value("available").toBool() || speeds.size() != points.size())
     return;
+  for (int i = 0; i < points.size(); ++i) {
+    auto point = points.at(i).toMap();
+    point["speed"] = speeds.at(i).toInt();
+    points[i] = point;
+  }
+  setFanCurve(points);
+}
+
+QVariantList Machine::normalisedCurve(const QVariantList &points) const {
+  const auto current = m_fanCurve.value("points").toList();
+  QVariantList out;
+  // The upper temperature of the step before, per sensor, in the new curve
+  // and in the one the firmware has now; the second gives each lower
+  // temperature the gap it already keeps below the step before it.
+  QVariantMap previous, previousNow;
+  for (int i = 0; i < points.size(); ++i) {
+    const auto wanted = points.at(i).toMap();
+    const auto now = current.value(i).toMap();
+    QVariantMap point = now;
+    point["speed"] = qBound(0, wanted.value("speed", now.value("speed")).toInt(), 255);
+    const bool last = i == points.size() - 1;
+    for (const char *sensor : {"cpu", "gpu", "ic"}) {
+      const QString low = QString::fromLatin1(sensor) + "Low";
+      // legion-laptop.c: temperatures rise from step to step, and the last
+      // step's upper temperature is 127, the end of the scale.
+      const int floor = i ? previous.value(sensor).toInt() : 0;
+      const int upper = last ? 127 : qBound(floor, wanted.value(sensor, now.value(sensor)).toInt(), 127);
+      point[sensor] = upper;
+      if (i) {
+        const int gap = qMax(0, previousNow.value(sensor).toInt() - now.value(low).toInt());
+        point[low] = qBound(0, floor - gap, upper);
+      }
+    }
+    for (const char *ramp : {"accel", "decel"})
+      if (now.value(ramp).toInt() > 0)
+        point[ramp] = qBound(2, wanted.value(ramp, now.value(ramp)).toInt(), 5);
+    for (const char *sensor : {"cpu", "gpu", "ic"}) {
+      previous[sensor] = point.value(sensor);
+      previousNow[sensor] = now.value(sensor);
+    }
+    out << point;
+  }
+  return out;
+}
+
+void Machine::writeCurve(const QVariantList &points) {
   const auto hwmon = controls::legionHwmon(m_root);
   if (!hwmon)
     return;
+  const auto present = [&](const QString &name) { return fs::exists(*hwmon / name.toStdString()); };
   QStringList arguments{"set"};
-  QVariantList stored;
-  for (int i = 0; i < speeds.size(); ++i) {
-    const int speed = qBound(0, speeds.at(i).toInt(), 255);
-    stored << speed;
-    const auto point = QString::number(i + 1);
-    arguments << "curve/pwm1_auto_point" + point + "_pwm=" + QString::number(speed);
-    if (fs::exists(*hwmon / ("pwm2_auto_point" + point.toStdString() + "_pwm")))
-      arguments << "curve/pwm2_auto_point" + point + "_pwm=" + QString::number(speed);
+  // Step by step from the first, so each step's temperatures are written
+  // after the ones below them have moved.
+  for (int i = 0; i < points.size(); ++i) {
+    const auto point = points.at(i).toMap();
+    const auto n = QString::number(i + 1);
+    const auto add = [&](const QString &name, const QVariant &value) {
+      if (present(name))
+        arguments << "curve/" + name + "=" + QString::number(value.toInt());
+    };
+    add("pwm1_auto_point" + n + "_pwm", point.value("speed"));
+    add("pwm2_auto_point" + n + "_pwm", point.value("speed"));
+    int sensor = 1;
+    for (const char *name : {"cpu", "gpu", "ic"}) {
+      const auto base = "pwm" + QString::number(sensor++) + "_auto_point" + n;
+      add(base + "_temp", point.value(name));
+      add(base + "_temp_hyst", point.value(QString::fromLatin1(name) + "Low"));
+    }
+    if (point.value("accel").toInt() > 0)
+      add("pwm1_auto_point" + n + "_accel", point.value("accel"));
+    if (point.value("decel").toInt() > 0)
+      add("pwm1_auto_point" + n + "_decel", point.value("decel"));
   }
-  // The firmware keeps one curve per power mode and loads it on every mode
-  // change, so a curve is remembered against the mode it was made in.
-  if (!m_powerProfile.isEmpty())
-    m_settings.setValue("fanCurve/" + m_powerProfile, stored);
   enqueue({"curve", arguments, tr("the fan curve")});
 }
 
+void Machine::setFanCurve(const QVariantList &points) {
+  const auto current = m_fanCurve.value("points").toList();
+  if (!m_fanCurve.value("available").toBool() || points.size() != current.size() || m_powerProfile.isEmpty())
+    return;
+  const auto curve = normalisedCurve(points);
+  // The firmware keeps one curve per power mode and loads it on every mode
+  // change, so a curve is remembered against the mode it was made in, and
+  // so is the firmware's own, the first time it is replaced, for Reset.
+  if (!m_settings.contains("fanCurveOriginal/" + m_powerProfile))
+    m_settings.setValue("fanCurveOriginal/" + m_powerProfile, current);
+  m_settings.setValue("fanCurve/" + m_powerProfile, curve);
+  writeCurve(curve);
+}
+
+void Machine::resetFanCurve() {
+  const auto original = m_settings.value("fanCurveOriginal/" + m_powerProfile).toList();
+  m_settings.remove("fanCurve/" + m_powerProfile);
+  m_settings.remove("fanCurveOriginal/" + m_powerProfile);
+  if (!original.isEmpty() && original.size() == m_fanCurve.value("points").toList().size())
+    writeCurve(original);
+  else
+    emit changed();
+}
+
+bool Machine::fanCurveCustomized() const { return m_settings.contains("fanCurve/" + m_powerProfile); }
+
 void Machine::reapplyFanCurve() {
   const auto stored = m_settings.value("fanCurve/" + m_powerProfile).toList();
-  if (stored.isEmpty() || !m_fanCurve.value("available").toBool())
+  const auto current = m_fanCurve.value("points").toList();
+  if (stored.isEmpty() || !m_fanCurve.value("available").toBool() || stored.size() != current.size())
     return;
-  QVariantList current;
-  for (const auto &point : m_fanCurve.value("points").toList())
-    current << point.toMap().value("speed").toInt();
+  // A curve stored before the full curve could be edited is speeds alone.
   QVariantList wanted;
-  for (const auto &speed : stored)
-    wanted << speed.toInt();
+  for (int i = 0; i < stored.size(); ++i) {
+    if (stored.at(i).typeId() == QMetaType::QVariantMap) {
+      wanted << stored.at(i);
+    } else {
+      auto point = current.at(i).toMap();
+      point["speed"] = stored.at(i).toInt();
+      wanted << point;
+    }
+  }
+  wanted = normalisedCurve(wanted);
   if (wanted != current)
-    setFanSpeeds(wanted);
+    writeCurve(wanted);
 }
 
 void Machine::setLighting(const QVariantMap &lighting) {
   if (!m_lightingAvailable)
     return;
+  const bool led = m_backlight >= 0;
+  const QString effect = lighting.value("effect").toString();
+  // Where the module publishes the backlight, off is the backlight off, the
+  // same thing Fn+Space does; the effect and colours chosen stay as they
+  // were for when it comes back on.
+  if (led && effect == "off") {
+    setBacklight(0);
+    return;
+  }
   bool differs = false;
   for (auto it = lighting.cbegin(); it != lighting.cend(); ++it) {
     if (!m_lighting.contains(it.key()) || m_lighting.value(it.key()) == it.value())
@@ -369,10 +477,143 @@ void Machine::setLighting(const QVariantMap &lighting) {
     m_settings.setValue("lighting/" + it.key(), it.value());
     differs = true;
   }
-  if (!differs)
+  m_settings.setValue("lighting/set", true);
+  if (led && (m_backlight == 0 || lighting.contains("brightness")))
+    setBacklight(qBound(1, m_lighting.value("brightness").toInt(), qMax(1, m_backlightMax)));
+  if (differs || (led && effect.size())) {
+    emit lightingChanged();
+    m_lightingDebounce.start();
+  }
+}
+
+void Machine::setBacklight(int level) {
+  if (m_backlight < 0 || level < 0 || level > m_backlightMax || level == m_backlight)
     return;
-  emit lightingChanged();
+  enqueue({"backlight", {"set", "led/platform::kbd_backlight=" + QString::number(level)},
+           tr("the keyboard backlight")});
+}
+
+void Machine::sendLighting() {
+  // Without the module's backlight, off is static black: the protocol has no
+  // off of its own, and the colours chosen stay stored for when it comes
+  // back on.
+  const QString effect = m_lighting.value("effect").toString();
+  const bool off = effect == "off";
+  QStringList arguments{"lighting", off ? QStringLiteral("static") : effect,
+                        QString::number(m_lighting.value("speed").toInt()),
+                        QString::number(m_lighting.value("brightness").toInt()),
+                        effect == "wave" ? m_lighting.value("direction").toString() : QStringLiteral("none")};
+  for (const auto &zone : m_lighting.value("zones").toList())
+    arguments << (off ? QStringLiteral("000000") : colourWord(zone));
+  enqueue({"lighting", arguments, tr("the keyboard lighting")});
+}
+
+void Machine::restoreLighting() {
+  // Only a lighting someone chose is put back, and not over a backlight
+  // they turned off.
+  if (!m_lightingAvailable || !m_settings.value("lighting/set").toBool() || m_backlight == 0)
+    return;
   m_lightingDebounce.start();
+}
+
+// --- Keeping settings applied -------------------------------------------------
+
+bool Machine::automatic() const { return m_settings.value("automatic/enabled", false).toBool(); }
+void Machine::setAutomatic(bool on) {
+  if (on == automatic())
+    return;
+  m_settings.setValue("automatic/enabled", on);
+  emit automationChanged();
+  if (on && m_restoring)
+    applyAutomatic();
+}
+QString Machine::automaticAc() const {
+  const auto chosen = m_settings.value("automatic/ac").toString();
+  return m_powerProfiles.contains(chosen) ? chosen
+         : m_powerProfiles.contains("performance") ? QStringLiteral("performance") : QString();
+}
+void Machine::setAutomaticAc(const QString &profile) {
+  if (profile == automaticAc() || !m_powerProfiles.contains(profile))
+    return;
+  m_settings.setValue("automatic/ac", profile);
+  emit automationChanged();
+  if (m_restoring)
+    applyAutomatic();
+}
+QString Machine::automaticBattery() const {
+  const auto chosen = m_settings.value("automatic/battery").toString();
+  if (m_powerProfiles.contains(chosen))
+    return chosen;
+  for (const char *quiet : {"low-power", "quiet"})
+    if (m_powerProfiles.contains(quiet))
+      return QString::fromLatin1(quiet);
+  return {};
+}
+void Machine::setAutomaticBattery(const QString &profile) {
+  if (profile == automaticBattery() || !m_powerProfiles.contains(profile))
+    return;
+  m_settings.setValue("automatic/battery", profile);
+  emit automationChanged();
+  if (m_restoring)
+    applyAutomatic();
+}
+
+void Machine::applyAutomatic() {
+  if (!automatic() || !m_battery.contains("ac"))
+    return;
+  const QString wanted = m_battery.value("ac").toBool() ? automaticAc() : automaticBattery();
+  if (!wanted.isEmpty())
+    setPowerProfile(wanted);
+}
+
+bool Machine::background() const { return m_settings.value("background/enabled", true).toBool(); }
+void Machine::setBackground(bool on) {
+  if (on == background())
+    return;
+  m_settings.setValue("background/enabled", on);
+  emit backgroundChanged();
+}
+
+void Machine::setRestoring(bool restoring) {
+  if (restoring == m_restoring)
+    return;
+  m_restoring = restoring;
+  if (m_fixture)
+    return;
+  auto bus = QDBusConnection::systemBus();
+  if (restoring) {
+    // The charger coming or going is UPower's OnBattery changing, and
+    // resuming is logind's PrepareForSleep(false). Both are signals, so
+    // nothing is polled while the machine is left alone.
+    const bool upower = bus.connect("org.freedesktop.UPower", "/org/freedesktop/UPower",
+                                    "org.freedesktop.DBus.Properties", "PropertiesChanged", this,
+                                    SLOT(powerSourceChanged()));
+    bus.connect("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+                "PrepareForSleep", this, SLOT(preparingForSleep(bool)));
+    // Without UPower the charger is looked at every ten seconds instead: one
+    // sysfs file, read on the worker.
+    if (!upower || !bus.interface()->isServiceRegistered("org.freedesktop.UPower"))
+      m_powerPoll.start();
+  } else {
+    bus.disconnect("org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.DBus.Properties",
+                   "PropertiesChanged", this, SLOT(powerSourceChanged()));
+    bus.disconnect("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+                   "PrepareForSleep", this, SLOT(preparingForSleep(bool)));
+    m_powerPoll.stop();
+    m_curveReapply.stop();
+  }
+}
+
+void Machine::powerSourceChanged() { requestRead(false); }
+
+void Machine::preparingForSleep(bool start) {
+  if (!start)
+    m_resume.start();
+}
+
+void Machine::restore() {
+  m_restoreAfterRead = true;
+  requestRead(true, true);
 }
 
 // --- The queue ---------------------------------------------------------------
@@ -521,7 +762,8 @@ void Machine::finish(const Request &request, bool ok, const QString &error) {
   // The change stays pending until the kernel's answer has been read back.
   if (!m_settling.contains(request.key))
     m_settling << request.key;
-  requestRead(request.key == "curve" || request.key == "platform-profile" || fullReadOnly(request.key));
+  requestRead(request.key == "curve" || request.key == "platform-profile" || request.key == "backlight" ||
+              fullReadOnly(request.key));
   if (!ok)
     emit failed(error);
   runNext();

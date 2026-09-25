@@ -1,6 +1,8 @@
 #include "appearance.h"
 #include "m3color.h"
 #include "m3motion.h"
+#include <QCoreApplication>
+#include <cmath>
 
 Appearance::Appearance(QObject *parent) : QObject(parent) {}
 
@@ -88,3 +90,38 @@ QVariantMap Appearance::colorScheme(const QColor &source, bool dark) const {
 }
 
 QVariantMap Appearance::motionSprings(bool expressive) const { return m3::motionScheme(expressive); }
+
+namespace {
+// The sizes offered. Material's guidance is to scale the whole interface
+// together rather than any one part of it, and these four steps keep every
+// 4dp grid value within a pixel of a whole one at common display scales.
+constexpr double kScales[] = {0.9, 1.0, 1.15, 1.3};
+double nearestScale(double wanted) {
+  double best = 1.0;
+  for (double scale : kScales)
+    if (std::abs(scale - wanted) < std::abs(best - wanted))
+      best = scale;
+  return best;
+}
+} // namespace
+
+double Appearance::storedScale() {
+  return nearestScale(QSettings("cohort", "cohort").value("interfaceScale", 1.0).toDouble());
+}
+
+double Appearance::interfaceScale() const {
+  return nearestScale(m_settings.value("interfaceScale", 1.0).toDouble());
+}
+void Appearance::setInterfaceScale(double scale) {
+  scale = nearestScale(scale);
+  if (qFuzzyCompare(scale, interfaceScale()))
+    return;
+  m_settings.setValue("interfaceScale", scale);
+  emit changed();
+}
+
+void Appearance::reopen() {
+  m_reopen = true;
+  m_settings.sync();
+  QCoreApplication::quit();
+}

@@ -36,6 +36,9 @@ struct Snapshot {
   // switches were not read, and the last ones stand.
   bool full = false;
   QVariantMap curve;
+  // The keyboard backlight's level and its top, or -1 where there is none.
+  int backlight = -1;
+  int backlightMax = -1;
   QVariantMap battery;
   double cpu = 0;
   double gpu = 0;

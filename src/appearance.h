@@ -25,6 +25,12 @@ class Appearance : public QObject {
   Q_PROPERTY(bool motion READ motion WRITE setMotion NOTIFY changed)
   // "expressive" or "standard", Material's two motion schemes.
   Q_PROPERTY(QString motionScheme READ motionScheme WRITE setMotionScheme NOTIFY changed)
+  // How large the whole interface is drawn, as a factor on the desktop's own
+  // scale: 0.9, 1, 1.15 or 1.3. Qt applies it only as the window is made, so
+  // the size in use is kept apart from the one chosen, and a reopen applies
+  // the difference.
+  Q_PROPERTY(double interfaceScale READ interfaceScale WRITE setInterfaceScale NOTIFY changed)
+  Q_PROPERTY(double appliedScale READ appliedScale CONSTANT)
 
 public:
   explicit Appearance(QObject *parent = nullptr);
@@ -43,6 +49,17 @@ public:
   void setMotion(bool motion);
   QString motionScheme() const;
   void setMotionScheme(const QString &scheme);
+  double interfaceScale() const;
+  void setInterfaceScale(double scale);
+  double appliedScale() const { return m_appliedScale; }
+  // Closes the window and opens it again, which is how a new size applies.
+  Q_INVOKABLE void reopen();
+  bool reopenRequested() const { return m_reopen; }
+
+  // The size stored for the next window, read before there is an
+  // application to read it with, and the one this window was made at.
+  static double storedScale();
+  void setAppliedScale(double scale) { m_appliedScale = scale; }
 
   // Every Material colour role for a source colour, at the chosen variant and
   // contrast (src/m3color.cpp).
@@ -55,5 +72,7 @@ signals:
 
 private:
   QSettings m_settings;
+  double m_appliedScale = 1;
+  bool m_reopen = false;
   mutable QHash<QString, QVariantMap> m_schemes;
 };

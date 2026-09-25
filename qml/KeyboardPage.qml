@@ -7,7 +7,11 @@ Page {
     title: qsTr("Keyboard")
 
     readonly property var lighting: machine.lighting
-    readonly property string effect: lighting.effect || "static"
+    // Where the module publishes the keyboard backlight, off is the
+    // backlight at level 0, whichever way it got there: this page, a
+    // command, or Fn+Space.
+    readonly property bool backlit: machine.backlight >= 0
+    readonly property string effect: backlit && machine.backlight === 0 ? "off" : lighting.effect || "static"
     // Static and breathing show the colours chosen for each zone; wave and
     // smooth cycle through colours of their own.
     readonly property bool coloured: effect === "static" || effect === "breath"
@@ -94,7 +98,7 @@ Page {
             accessibleName: qsTr("Brightness")
             options: [{key: 1, label: qsTr("Low"), name: "brightness_low"},
                       {key: 2, label: qsTr("High"), name: "brightness_high"}]
-            value: page.lighting.brightness
+            value: page.backlit && machine.backlight > 0 ? machine.backlight : page.lighting.brightness
             onChosen: key => machine.setLighting({brightness: key})
         }
     }
@@ -124,6 +128,24 @@ Page {
             value: page.lighting.speed || 1
             Accessible.name: qsTr("Speed")
             onMoved: machine.setLighting({speed: Math.round(value)})
+        }
+    }
+
+    // A keyboard with a single-colour backlight has no zones or effects, only
+    // the backlight's levels.
+    Section {
+        objectName: "backlight"
+        visible: !machine.lightingAvailable && page.backlit
+        label: qsTr("Backlight")
+        MSegmentedControl {
+            objectName: "backlightLevels"
+            Layout.fillWidth: true
+            accessibleName: qsTr("Backlight")
+            options: [{key: 0, label: qsTr("Off"), name: "backlight_0"},
+                      {key: 1, label: machine.backlightMax > 1 ? qsTr("Low") : qsTr("On"), name: "backlight_1"},
+                      {key: 2, label: qsTr("High"), name: "backlight_2"}].slice(0, machine.backlightMax + 1)
+            value: machine.backlight
+            onChosen: key => machine.setBacklight(key)
         }
     }
 
@@ -161,7 +183,7 @@ Page {
     }
 
     EmptyState {
-        visible: !machine.lightingAvailable && machine.switches["fn-lock"] === undefined
+        visible: !machine.lightingAvailable && !page.backlit && machine.switches["fn-lock"] === undefined
         symbol: "keyboard"
         headline: qsTr("No keyboard controls")
         supporting: qsTr("This laptop's keyboard has no lighting or keys Cohort can change.")

@@ -36,6 +36,8 @@ set(COHORT_SOURCES
  src/sensors.cpp src/sensors.h
  src/snapshot.cpp src/snapshot.h
  src/machine.cpp src/machine.h
+ src/agent.cpp src/agent.h
+ src/cli.cpp src/cli.h
  src/appearance.cpp src/appearance.h
  src/m3color.cpp src/m3color.h
  src/m3motion.cpp src/m3motion.h
@@ -78,6 +80,11 @@ install(TARGETS cohort-helper RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/io.github.yappologistic.Cohort.policy"
         DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
 install(FILES assets/io.github.yappologistic.Cohort.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+# The background agent starts at login from the XDG autostart directory. It
+# is installed for every user and leaves at once for anyone who turned it
+# off, so nothing is written into anyone's home directory to start it.
+install(FILES assets/io.github.yappologistic.Cohort.Agent.desktop
+        DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/xdg/autostart)
 install(FILES assets/io.github.yappologistic.Cohort.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 install(FILES assets/io.github.yappologistic.Cohort.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
 # Distributions whose packaging installs licenses itself (RPM's %license)
@@ -107,6 +114,14 @@ if(BUILD_TESTING)
  target_link_libraries(cohort-machine-tests PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::DBus Qt6::Test ${CMAKE_DL_LIBS})
  add_test(NAME machine COMMAND cohort-machine-tests)
  set_tests_properties(machine PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+ # The agent and the commands, as separate processes of the real binary.
+ qt_add_executable(cohort-process-tests tests/process_test.cpp tests/fixture.h)
+ target_include_directories(cohort-process-tests PRIVATE tests)
+ target_compile_definitions(cohort-process-tests PRIVATE COHORT_BINARY="$<TARGET_FILE:cohort>")
+ target_link_libraries(cohort-process-tests PRIVATE Qt6::Core Qt6::Test)
+ add_dependencies(cohort-process-tests cohort)
+ add_test(NAME processes COMMAND cohort-process-tests)
 
  # Writes a fixture machine to disk, for scripts/capture.sh.
  qt_add_executable(cohort-fixture tests/make_fixture.cpp tests/fixture.h)

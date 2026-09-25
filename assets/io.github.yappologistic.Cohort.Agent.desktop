@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cohort
+Comment=Keeps the fan curve, lighting and automatic power mode applied
+Exec=cohort --background
+Icon=io.github.yappologistic.Cohort
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+X-KDE-autostart-phase=2

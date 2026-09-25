@@ -34,6 +34,7 @@
 !/assets/
 /assets/*
 !/assets/io.github.yappologistic.Cohort.desktop
+!/assets/io.github.yappologistic.Cohort.Agent.desktop
 !/assets/io.github.yappologistic.Cohort.metainfo.xml
 !/assets/io.github.yappologistic.Cohort.policy.in
 !/assets/io.github.yappologistic.Cohort.svg

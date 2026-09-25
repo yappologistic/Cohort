@@ -1,4 +1,6 @@
+#include "agent.h"
 #include "appearance.h"
+#include "cli.h"
 #include "desktoptheme.h"
 #include "machine.h"
 #include <QCache>
@@ -15,6 +17,7 @@
 #include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickStyle>
+#include <QProcess>
 #include <QQuickWindow>
 #include <QSettings>
 #include <QSvgRenderer>
@@ -81,20 +84,58 @@ private:
   QMutex m_mutex;
 };
 
-int main(int argc, char **argv) {
-  QGuiApplication app(argc, argv);
-  app.setApplicationName("cohort");
-  app.setApplicationDisplayName("Cohort");
-  app.setOrganizationName("cohort");
-  app.setApplicationVersion(COHORT_VERSION);
-  // The desktop entry's name, which Wayland compositors take as the app id.
-  app.setDesktopFileName("io.github.yappologistic.Cohort");
+namespace {
 
-  // Settings live in the XDG config directory. Captures and tests point them
-  // at a directory of their own, leaving the desktop's configuration, and so
-  // its fonts and palette, as the person has them.
+// Captures and tests point the settings at a directory of their own,
+// leaving the desktop's configuration, and so its fonts and palette, as the
+// person has them. Done before anything reads a setting.
+void isolateSettings() {
   if (qEnvironmentVariableIsSet("COHORT_CONFIG_DIR"))
     QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, qEnvironmentVariable("COHORT_CONFIG_DIR"));
+}
+
+// The names QSettings files its settings under, shared by the window, the
+// agent and the commands so all three read the same file.
+void name(QCoreApplication &app) {
+  app.setApplicationName("cohort");
+  app.setOrganizationName("cohort");
+  app.setApplicationVersion(COHORT_VERSION);
+}
+
+// A fixture tree stands in for /sys and /dev under test and for captures.
+std::filesystem::path machineRoot() {
+  return qEnvironmentVariableIsSet("COHORT_SYS_ROOT") ? qEnvironmentVariable("COHORT_SYS_ROOT").toStdString()
+                                                      : std::string("/");
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+  // The agent and the commands need no window, and so no display: they run
+  // on a core application, which a login with no compositor yet can start.
+  isolateSettings();
+  QStringList raw;
+  for (int i = 0; i < argc; ++i)
+    raw << QString::fromLocal8Bit(argv[i]);
+  if (raw.contains("--background") || cli::wanted(raw)) {
+    QCoreApplication core(argc, argv);
+    name(core);
+    return raw.contains("--background") ? agent::run(machineRoot()) : cli::run(raw, machineRoot());
+  }
+
+  // The interface size the person chose, applied through Qt's own scale
+  // factor so text and symbols are drawn at the size rather than stretched
+  // to it. Qt reads it as the application starts, which is why a change
+  // waits for a reopen. A scale set in the environment is left alone.
+  const double scale = Appearance::storedScale();
+  if (!qEnvironmentVariableIsSet("QT_SCALE_FACTOR") && !qFuzzyCompare(scale, 1.0))
+    qputenv("QT_SCALE_FACTOR", QByteArray::number(scale));
+
+  QGuiApplication app(argc, argv);
+  name(app);
+  app.setApplicationDisplayName("Cohort");
+  // The desktop entry's name, which Wayland compositors take as the app id.
+  app.setDesktopFileName("io.github.yappologistic.Cohort");
 
   const auto args = app.arguments();
   if (args.contains("--version")) {
@@ -135,12 +176,33 @@ int main(int argc, char **argv) {
   font.setFamily(QFontInfo(font).family());
   QGuiApplication::setFont(font);
 
-  // A fixture tree stands in for /sys and /dev under test and for captures.
-  const std::filesystem::path root = qEnvironmentVariableIsSet("COHORT_SYS_ROOT")
-                                         ? qEnvironmentVariable("COHORT_SYS_ROOT").toStdString()
-                                         : std::string("/");
+  const auto root = machineRoot();
   Appearance appearance;
+  appearance.setAppliedScale(scale);
   Machine machine(root);
+  // One instance keeps the settings applied. With the background agent on,
+  // that is the agent, started here if the desktop did not start it; with it
+  // off, it is this window while it is open. A fixture machine starts no
+  // agent, being a picture of a laptop rather than one, and neither does an
+  // isolated window: those are for tests, captures and measurements, and
+  // leave the machine's own agent alone either way.
+  const bool leaveAgentAlone = root != std::filesystem::path("/") || args.contains("--isolated");
+  const auto chooseRestorer = [&machine, leaveAgentAlone] {
+    // With no agent of its own, an isolated window restores for itself.
+    if (leaveAgentAlone) {
+      machine.setRestoring(true);
+      return;
+    }
+    if (machine.background()) {
+      agent::start();
+      machine.setRestoring(false);
+    } else {
+      agent::stop();
+      machine.setRestoring(true);
+    }
+  };
+  chooseRestorer();
+  QObject::connect(&machine, &Machine::backgroundChanged, &machine, chooseRestorer);
   DesktopTheme desktopTheme;
 
   QQmlApplicationEngine engine;
@@ -215,5 +277,12 @@ int main(int argc, char **argv) {
   if (args.contains("--latency-test"))
     QTimer::singleShot(0, &app, [window] { runLatencyTest(window); });
 #endif
-  return app.exec();
+  const int status = app.exec();
+  // A new size applies to a new window. The single-instance socket has
+  // closed with this one, so the new process is the first again.
+  if (appearance.reopenRequested()) {
+    server.close();
+    QProcess::startDetached(QCoreApplication::applicationFilePath(), QCoreApplication::arguments().mid(1));
+  }
+  return status;
 }

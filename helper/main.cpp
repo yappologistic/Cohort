@@ -43,7 +43,8 @@ void usage() {
 }
 
 int set(int argc, char **argv) {
-  if (argc < 3 || argc > 64) {
+  // A whole fan curve is ten steps of ten values each.
+  if (argc < 3 || argc > 160) {
     usage();
     return EX_USAGE;
   }

@@ -14,7 +14,7 @@ namespace {
 const char *const kSwitchKeys[] = {
     "fn-lock",           "usb-charging",          "legion/winkey",    "legion/touchpad",
     "legion/overdrive",  "legion/gsync",          "legion/fan_fullspeed", "legion/lockfancontroller",
-    "led/platform::ylogo", "led/platform::ioport",
+    "led/platform::ylogo", "led/platform::ioport", "curve/minifancurve",
 };
 
 // The firmware power limits worth a slider, from the attributes
@@ -39,12 +39,22 @@ const Limit kLimits[] = {
     {"gpu_temp", "GPU temperature limit", "°C"},
 };
 
+// Every value of every step of legion_hwmon's fan curve
+// (legion-laptop.c, the pwmN_auto_pointM_* attributes): the two fans'
+// speeds on the PWM scale, the upper temperature of the step for the CPU
+// (sensor 1), the GPU (2) and the chipset (3), each with the lower
+// temperature the step falls back below (the _temp_hyst files hold the
+// temperature itself, not a difference), and the first fan's ramp times
+// from 2 to 5, lower being faster.
 QVariantMap readCurve(const fs::path &root) {
   QVariantMap curve{{"available", false}};
   const auto hwmon = controls::legionHwmon(root);
   if (hwmon) {
     const auto text = [](const fs::path &path) { return controls::readText(path).value_or(std::string()); };
-    int size = int(controls::parseInteger(text(*hwmon / "auto_points_size")).value_or(0));
+    const auto number = [&](const std::string &name, int fallback) {
+      return int(controls::parseInteger(text(*hwmon / name)).value_or(fallback));
+    };
+    int size = number("auto_points_size", 0);
     if (size <= 0)
       while (size < 10 && fs::exists(*hwmon / ("pwm1_auto_point" + std::to_string(size + 1) + "_pwm")))
         ++size;
@@ -56,13 +66,19 @@ QVariantMap readCurve(const fs::path &root) {
         break;
       points.append(QVariantMap{
           {"speed", int(*speed)},
-          {"cpu", int(controls::parseInteger(text(*hwmon / ("pwm1" + base + "temp"))).value_or(0))},
-          {"gpu", int(controls::parseInteger(text(*hwmon / ("pwm2" + base + "temp"))).value_or(0))}});
+          {"cpu", number("pwm1" + base + "temp", 0)},
+          {"cpuLow", number("pwm1" + base + "temp_hyst", 0)},
+          {"gpu", number("pwm2" + base + "temp", 0)},
+          {"gpuLow", number("pwm2" + base + "temp_hyst", 0)},
+          {"ic", number("pwm3" + base + "temp", 0)},
+          {"icLow", number("pwm3" + base + "temp_hyst", 0)},
+          {"accel", number("pwm1" + base + "accel", 0)},
+          {"decel", number("pwm1" + base + "decel", 0)}});
     }
     if (!points.isEmpty()) {
       curve["available"] = true;
       curve["points"] = points;
-      curve["maxRpm"] = int(controls::parseInteger(text(*hwmon / "fan1_max")).value_or(0));
+      curve["maxRpm"] = number("fan1_max", 0);
     }
   }
   return curve;
@@ -108,7 +124,9 @@ QVariantMap readBattery(const fs::path &root) {
 
 } // namespace
 
-bool fullReadOnly(const QString &key) { return key.startsWith("legion/") || key.startsWith("led/"); }
+bool fullReadOnly(const QString &key) {
+  return key.startsWith("legion/") || key.startsWith("led/") || key.startsWith("curve/");
+}
 
 Snapshot capture(const fs::path &root, Sensors &sensors, bool full, bool rediscover) {
   Snapshot s;
@@ -183,8 +201,6 @@ Snapshot capture(const fs::path &root, Sensors &sensors, bool full, bool redisco
       switches.insert(key, *value > 0);
   }
 
-  const bool legion = controls::legionDevice(root).has_value();
-  const bool lighting = keyboard::find(root).has_value();
 
   s.profile = profile;
   s.profiles = profiles;
@@ -197,6 +213,13 @@ Snapshot capture(const fs::path &root, Sensors &sensors, bool full, bool redisco
   if (full) {
     s.full = true;
     s.curve = readCurve(root);
+    // The keyboard backlight's level, from legion_laptop's LED, which is
+    // what Fn+Space moves (legion-laptop.c, platform::kbd_backlight). It
+    // goes through WMI, which the module logs, so it is read here only.
+    if (const auto led = controls::resolve(root, "led/platform::kbd_backlight")) {
+      s.backlight = int(controls::parseInteger(controls::readText(led->path).value_or("")).value_or(-1));
+      s.backlightMax = int(led->maximum);
+    }
   }
   s.battery = readBattery(root);
   if (rediscover)

@@ -74,6 +74,67 @@ Page {
         }
     }
 
+    // The automatic power mode: one mode on the charger and one on battery.
+    // The mode picked by hand stays until the charger next comes or goes.
+    Section {
+        objectName: "automatic"
+        visible: machine.powerProfiles.length > 1
+        label: qsTr("Automatic")
+        MListItem {
+            headline: qsTr("Follow the charger")
+            supporting: qsTr("Changes mode when you plug in or unplug")
+            Accessible.role: Accessible.CheckBox
+            Accessible.checked: machine.automatic
+            onClicked: machine.automatic = !machine.automatic
+            MSwitch {
+                objectName: "automaticSwitch"
+                anchors.verticalCenter: parent.verticalCenter
+                Accessible.name: qsTr("Follow the charger")
+                checked: machine.automatic
+                onToggled: {
+                    machine.automatic = checked
+                    checked = Qt.binding(() => machine.automatic)
+                }
+            }
+        }
+    }
+    ColumnLayout {
+        visible: machine.automatic && machine.powerProfiles.length > 1
+        Layout.fillWidth: true
+        spacing: Theme.space
+        CohortText {
+            text: qsTr("Plugged in")
+            font.pixelSize: Theme.titleSmall
+            typeRole: "titleSmall"
+            color: Theme.muted
+            Layout.leftMargin: Theme.listLeadingSpace
+        }
+        MSegmentedControl {
+            objectName: "automaticAc"
+            Layout.fillWidth: true
+            accessibleName: qsTr("Mode when plugged in")
+            options: machine.powerProfiles.map(p => ({key: p, label: page.names[p] || p, name: "ac_" + p}))
+            value: machine.automaticAc
+            onChosen: key => machine.automaticAc = key
+        }
+        CohortText {
+            text: qsTr("On battery")
+            font.pixelSize: Theme.titleSmall
+            typeRole: "titleSmall"
+            color: Theme.muted
+            Layout.leftMargin: Theme.listLeadingSpace
+            Layout.topMargin: Theme.space
+        }
+        MSegmentedControl {
+            objectName: "automaticBattery"
+            Layout.fillWidth: true
+            accessibleName: qsTr("Mode on battery")
+            options: machine.powerProfiles.map(p => ({key: p, label: page.names[p] || p, name: "battery_" + p}))
+            value: machine.automaticBattery
+            onChosen: key => machine.automaticBattery = key
+        }
+    }
+
     Section {
         objectName: "graphics"
         label: qsTr("Graphics")

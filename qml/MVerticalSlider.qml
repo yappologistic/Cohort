@@ -14,7 +14,7 @@ Slider {
     id: slider
     orientation: Qt.Vertical
     readonly property real track: Theme.sliderTrack.xsmall
-    readonly property real handleLength: Theme.sliderHandleHeight.xsmall
+    property real handleLength: Theme.sliderHandleHeight.xsmall
     implicitWidth: handleLength
     implicitHeight: 160
     padding: 0
