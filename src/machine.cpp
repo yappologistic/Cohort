@@ -160,6 +160,26 @@ void Machine::setActive(bool active) {
 
 void Machine::refresh() { requestRead(true, false, true); }
 
+QString Machine::profileName(const QString &profile) const {
+  // The Fn+Q modes are Quiet, Balanced and Performance, and max-power is the
+  // mode Lenovo calls Extreme.
+  if (profile == "low-power" || profile == "quiet")
+    return tr("Quiet");
+  if (profile == "cool")
+    return tr("Cool");
+  if (profile == "balanced")
+    return tr("Balanced");
+  if (profile == "balanced-performance")
+    return tr("Balanced+");
+  if (profile == "performance")
+    return tr("Performance");
+  if (profile == "max-power")
+    return tr("Extreme");
+  if (profile == "custom")
+    return tr("Custom");
+  return profile;
+}
+
 void Machine::requestRead(bool full, bool reapply, bool rediscover) {
   m_wanted.full |= full;
   m_wanted.reapply |= reapply;

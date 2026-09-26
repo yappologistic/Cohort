@@ -6,14 +6,6 @@ Page {
     objectName: "powerPage"
     title: qsTr("Power")
 
-    // The platform profile names the kernel uses, in the words Lenovo prints
-    // on the machine: the Fn+Q modes are Quiet, Balanced and Performance, and
-    // max-power is the mode Lenovo calls Extreme.
-    readonly property var names: ({
-        "low-power": qsTr("Quiet"), "quiet": qsTr("Quiet"), "cool": qsTr("Cool"),
-        "balanced": qsTr("Balanced"), "balanced-performance": qsTr("Balanced+"),
-        "performance": qsTr("Performance"), "max-power": qsTr("Extreme"), "custom": qsTr("Custom")
-    })
     readonly property var explanations: ({
         "low-power": qsTr("Quiet fans and a cool chassis, at lower performance"),
         "quiet": qsTr("Quiet fans and a cool chassis, at lower performance"),
@@ -32,7 +24,7 @@ Page {
         visible: machine.powerProfiles.length > 0
         Layout.fillWidth: true
         accessibleName: qsTr("Power mode")
-        options: machine.powerProfiles.map(p => ({key: p, label: page.names[p] || p, name: "profile_" + p}))
+        options: machine.powerProfiles.map(p => ({key: p, label: machine.profileName(p), name: "profile_" + p}))
         value: page.shown
         onChosen: key => { page.requested = key; machine.setPowerProfile(key) }
     }
@@ -113,7 +105,7 @@ Page {
             objectName: "automaticAc"
             Layout.fillWidth: true
             accessibleName: qsTr("Mode when plugged in")
-            options: machine.powerProfiles.map(p => ({key: p, label: page.names[p] || p, name: "ac_" + p}))
+            options: machine.powerProfiles.map(p => ({key: p, label: machine.profileName(p), name: "ac_" + p}))
             value: machine.automaticAc
             onChosen: key => machine.automaticAc = key
         }
@@ -129,7 +121,7 @@ Page {
             objectName: "automaticBattery"
             Layout.fillWidth: true
             accessibleName: qsTr("Mode on battery")
-            options: machine.powerProfiles.map(p => ({key: p, label: page.names[p] || p, name: "battery_" + p}))
+            options: machine.powerProfiles.map(p => ({key: p, label: machine.profileName(p), name: "battery_" + p}))
             value: machine.automaticBattery
             onChosen: key => machine.automaticBattery = key
         }

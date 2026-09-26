@@ -22,7 +22,7 @@ Free software (GPL-3.0-or-later). Not made or endorsed by Lenovo.
 
 - **Power:** Quiet, Balanced, Performance, Custom (and Extreme where supported). In Custom, set the firmware's CPU and GPU power limits. Switch modes automatically when you plug in or unplug.
 - **Battery:** Conservation, Standard or Rapid charging, always-on USB, and battery health.
-- **Fans:** temperatures, fan speeds, and your own fan curve: speed, CPU, GPU and chipset thresholds, and ramp speed for every step. Reset to the firmware's curve at any time.
+- **Fans:** temperatures, fan speeds, and your own fan curve for each power mode: speed, CPU, GPU and chipset thresholds, and ramp speed for every step. Reset to the firmware's curve at any time.
 - **Keyboard:** four-zone RGB lighting, backlight on and off, Fn lock, Windows key, touchpad and logo light.
 - **Stays applied:** a small background service puts your fan curve and lighting back after restarts, sleep and mode changes.
 - **Keybinds:** change modes, charging and lighting from the command line.

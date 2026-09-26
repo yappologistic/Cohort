@@ -42,8 +42,13 @@ Page {
     }
 
     Section {
+        objectName: "curveSection"
         visible: machine.fanCurve.available === true
-        label: qsTr("Curve")
+        // The firmware keeps a curve for each power mode, and so does Cohort:
+        // the one shown is the mode the laptop is in, and changing mode
+        // brings up that mode's own.
+        label: machine.powerProfile.length ? qsTr("Curve for %1 mode").arg(machine.profileName(machine.powerProfile))
+                                           : qsTr("Curve")
         // Reset takes a curve Cohort set back to the one the firmware had
         // for this mode, and only appears once there is one to take back.
         actionText: machine.fanCurveCustomized ? qsTr("Reset") : ""
