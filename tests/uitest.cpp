@@ -150,6 +150,10 @@ void runUiTest(QQuickWindow *window, const QString &out) {
   // Fans: raising one step of the curve writes both fans' points.
   check(click(window, "rail_fans"), "the rail reaches Fans");
   check(waitFor([&] { return find(window->contentItem(), "curvePoint3") != nullptr; }), "the fan curve is showing");
+  // The laptop went to the battery mode above, and the curve is that mode's.
+  const auto *curveSection = find(window->contentItem(), "curveSection");
+  check(curveSection && curveSection->property("label").toString() == "Curve for Quiet mode",
+        "the curve names the mode it belongs to");
   const QString point = "sys/class/hwmon/hwmon7/pwm1_auto_point3_pwm";
   const QByteArray speed = fixtureFile(point);
   check(drag(window, "curvePoint3", QPoint(0, -80)), "a curve point can be dragged");

@@ -157,6 +157,9 @@ public:
   }
 
   Q_INVOKABLE void refresh();
+  // A platform profile in the words Lenovo prints on the machine, for the
+  // window and the commands alike: low-power is Quiet, max-power Extreme.
+  Q_INVOKABLE QString profileName(const QString &profile) const;
   Q_INVOKABLE void setPowerProfile(const QString &profile);
   Q_INVOKABLE void setChargeMode(const QString &mode);
   Q_INVOKABLE void setSwitch(const QString &key, bool on);

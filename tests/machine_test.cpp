@@ -326,6 +326,47 @@ private slots:
     QCOMPARE(fixture::read(dir.path(), hw + "pwm1_auto_point5_pwm"), QByteArray("10"));
   }
 
+  void keepsACurveForEachMode() {
+    QTemporaryDir dir;
+    fixture::withLegion(dir.path());
+    Machine machine(root(dir));
+    machine.setRestoring(true);
+    QTRY_VERIFY(machine.fanCurve().value("available").toBool());
+    const QString hw = "sys/class/hwmon/hwmon7/";
+    const QString point = hw + "pwm1_auto_point5_pwm";
+    // A mode change as the firmware makes it: the mode's own curve, here a
+    // flat 10, is loaded in place of whatever was there.
+    const auto changeMode = [&](const QString &profile) {
+      fixture::put(dir.path(), "sys/firmware/acpi/platform_profile", profile.toUtf8() + "\n");
+      for (int i = 1; i <= 10; ++i)
+        fixture::put(dir.path(), hw + "pwm1_auto_point" + QString::number(i) + "_pwm", "10\n");
+      machine.refresh();
+      QTRY_COMPARE(machine.powerProfile(), profile);
+    };
+    const auto setSpeeds = [&](int speed) {
+      QVariantList speeds;
+      for (int i = 0; i < 10; ++i)
+        speeds << speed;
+      machine.setFanSpeeds(speeds);
+      QTRY_VERIFY(machine.pending().isEmpty());
+    };
+    setSpeeds(100);
+    changeMode("performance");
+    setSpeeds(200);
+    QCOMPARE(fixture::read(dir.path(), point), QByteArray("200"));
+
+    // Each mode gets its own back, not the one set last.
+    changeMode("balanced");
+    QTRY_COMPARE_WITH_TIMEOUT(fixture::read(dir.path(), point), QByteArray("100"), 4000);
+    changeMode("performance");
+    QTRY_COMPARE_WITH_TIMEOUT(fixture::read(dir.path(), point), QByteArray("200"), 4000);
+    // A mode nobody made a curve for keeps the firmware's.
+    changeMode("low-power");
+    QVERIFY(!machine.fanCurveCustomized());
+    QTest::qWait(2500);
+    QCOMPARE(fixture::read(dir.path(), point), QByteArray("10"));
+  }
+
   void turnsTheBacklightOffAndBackOn() {
     QTemporaryDir dir;
     fixture::withLegion(dir.path());
