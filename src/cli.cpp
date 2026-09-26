@@ -3,6 +3,9 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTimer>
 #include <cmath>
 #include <cstdio>
@@ -34,12 +37,21 @@ QString chargeFor(const QString &word) {
   return {};
 }
 
+// The inverse of profileFor: the word --mode takes for a profile.
+QString wordFor(const QString &profile) {
+  if (profile == "low-power")
+    return QStringLiteral("quiet");
+  if (profile == "max-power")
+    return QStringLiteral("extreme");
+  return profile;
+}
+
 void usage() {
   std::fputs("usage: cohort --mode quiet|balanced|performance|extreme|custom|next\n"
              "       cohort --charge conservation|standard|rapid\n"
              "       cohort --lighting off|static|breath|wave|smooth\n"
              "       cohort --backlight off|low|high\n"
-             "       cohort --status\n",
+             "       cohort --status [--json]\n",
              stderr);
 }
 
@@ -66,6 +78,54 @@ bool settle(Machine &machine, QString *failure) {
 
 QString readable(double celsius) { return std::isnan(celsius) ? QStringLiteral("-") : QString::number(qRound(celsius)) + " °C"; }
 
+// --status, one figure to a line.
+QString statusText(const Machine &machine) {
+  const auto battery = machine.battery();
+  QString out;
+  const auto line = [&](const QString &label, const QString &value) {
+    out += label.leftJustified(9) + ' ' + value + '\n';
+  };
+  line("mode", machine.powerProfile());
+  if (!machine.chargeMode().isEmpty())
+    line("charging", machine.chargeMode());
+  if (battery.value("present").toBool())
+    line("battery", QString::number(battery.value("percent").toInt()) + "% " + battery.value("status").toString());
+  line("cpu", readable(machine.cpuTemperature()));
+  if (machine.gpuPresent())
+    line("gpu", machine.gpuAsleep() ? QStringLiteral("asleep") : readable(machine.gpuTemperature()));
+  for (const auto &fan : machine.fans())
+    line(fan.toMap().value("label").toString().toLower(), QString::number(fan.toMap().value("rpm").toInt()) + " rpm");
+  if (machine.backlight() >= 0)
+    line("backlight", QString::number(machine.backlight()) + " of " + QString::number(machine.backlightMax()));
+  return out;
+}
+
+// --status --json, for status bars and scripts. text, alt, class and tooltip
+// are the fields Waybar's custom module reads (man 5 waybar-custom); the
+// rest are the figures themselves, null where the laptop has none to give.
+QByteArray statusJson(const Machine &machine) {
+  const auto celsius = [](double value) { return std::isnan(value) ? QJsonValue() : QJsonValue(qRound(value)); };
+  const auto battery = machine.battery();
+  const QString word = wordFor(machine.powerProfile());
+  QJsonArray fans;
+  for (const auto &fan : machine.fans())
+    fans.append(QJsonObject{{"label", fan.toMap().value("label").toString()}, {"rpm", fan.toMap().value("rpm").toInt()}});
+  const QJsonObject status{
+      {"text", machine.profileName(machine.powerProfile())},
+      {"alt", word},
+      {"class", word},
+      {"tooltip", statusText(machine).trimmed()},
+      {"mode", machine.powerProfile()},
+      {"charging", machine.chargeMode().isEmpty() ? QJsonValue() : QJsonValue(machine.chargeMode())},
+      {"battery", battery.value("present").toBool() ? QJsonValue(battery.value("percent").toInt()) : QJsonValue()},
+      {"cpu", celsius(machine.cpuTemperature())},
+      {"gpu", machine.gpuPresent() && !machine.gpuAsleep() ? celsius(machine.gpuTemperature()) : QJsonValue()},
+      {"fans", fans},
+      {"backlight", machine.backlight() >= 0 ? QJsonValue(machine.backlight()) : QJsonValue()},
+  };
+  return QJsonDocument(status).toJson(QJsonDocument::Compact);
+}
+
 } // namespace
 
 bool wanted(const QStringList &arguments) {
@@ -91,20 +151,10 @@ int run(const QStringList &arguments, const std::filesystem::path &root) {
   };
 
   if (arguments.contains("--status")) {
-    const auto battery = machine.battery();
-    std::printf("mode      %s\n", qPrintable(machine.powerProfile()));
-    if (!machine.chargeMode().isEmpty())
-      std::printf("charging  %s\n", qPrintable(machine.chargeMode()));
-    if (battery.value("present").toBool())
-      std::printf("battery   %d%% %s\n", battery.value("percent").toInt(), qPrintable(battery.value("status").toString()));
-    std::printf("cpu       %s\n", qPrintable(readable(machine.cpuTemperature())));
-    if (machine.gpuPresent())
-      std::printf("gpu       %s\n", machine.gpuAsleep() ? "asleep" : qPrintable(readable(machine.gpuTemperature())));
-    for (const auto &fan : machine.fans())
-      std::printf("%-9s %d rpm\n", qPrintable(fan.toMap().value("label").toString().toLower()),
-                  fan.toMap().value("rpm").toInt());
-    if (machine.backlight() >= 0)
-      std::printf("backlight %d of %d\n", machine.backlight(), machine.backlightMax());
+    if (arguments.contains("--json"))
+      std::printf("%s\n", statusJson(machine).constData());
+    else
+      std::fputs(qPrintable(statusText(machine)), stdout);
     return 0;
   }
 

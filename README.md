@@ -25,7 +25,7 @@ Free software (GPL-3.0-or-later). Not made or endorsed by Lenovo.
 - **Fans:** temperatures, fan speeds, and your own fan curve for each power mode: speed, CPU, GPU and chipset thresholds, and ramp speed for every step. Reset to the firmware's curve at any time.
 - **Keyboard:** four-zone RGB lighting, backlight on and off, Fn lock, Windows key, touchpad and logo light.
 - **Stays applied:** a small background service puts your fan curve and lighting back after restarts, sleep and mode changes.
-- **Keybinds:** change modes, charging and lighting from the command line.
+- **Keybinds and status bars:** change modes, charging and lighting from the command line, and show the mode in Waybar.
 
 Cohort only shows what your laptop supports, and follows your desktop's colours, theme and font. The window adapts to its size, and Settings has four interface sizes.
 
@@ -162,9 +162,26 @@ cohort --charge rapid       # or conservation, standard
 cohort --lighting off       # or static, breath, wave, smooth
 cohort --backlight high     # or off, low
 cohort --status             # mode, charging, temperatures, fans
+cohort --status --json      # the same, as one line of JSON
 ```
 
 For example, in Hyprland's config: `bind = SUPER, F5, exec, cohort --mode next`
+
+### Status bar
+
+To show the power mode in Waybar, with the full status as its tooltip, add this module to your Waybar config and `"custom/cohort"` to one of its `modules-` lists:
+
+```jsonc
+"custom/cohort": {
+  "exec": "cohort --status --json",
+  "return-type": "json",
+  "interval": 5,
+  "signal": 8,
+  "on-click": "cohort --mode next; pkill -RTMIN+8 waybar"
+}
+```
+
+Clicking it cycles the modes. The module gets the mode as a CSS class, such as `#custom-cohort.performance`, for styling. To update the bar straight away when a keybind changes the mode, add `; pkill -RTMIN+8 waybar` to the keybind too. Other bars can read the same JSON: it also has `cpu`, `gpu`, `fans`, `battery` and `charging`.
 
 ## Background service
 

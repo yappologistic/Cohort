@@ -3,6 +3,9 @@
 // machine, the way a keybind runs a command and the way login starts the
 // agent. What each one did is read back from the fixture's files.
 #include "fixture.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QSettings>
 #include <QTest>
@@ -57,6 +60,29 @@ private slots:
     QVERIFY(out.contains("gpu       asleep"));
     QVERIFY(out.contains("fan 1     2200 rpm"));
     QVERIFY(out.contains("backlight 2 of 2"));
+  }
+
+  void reportsStatusAsJson() {
+    QCOMPARE(cohort({"--mode", "quiet"}), 0);
+    QString out;
+    QCOMPARE(cohort({"--status", "--json"}, &out), 0);
+    // One line, so a status bar reading line by line takes it whole.
+    QCOMPARE(out.count('\n'), 1);
+    QJsonParseError error;
+    const auto status = QJsonDocument::fromJson(out.toUtf8(), &error).object();
+    QVERIFY2(error.error == QJsonParseError::NoError, qPrintable(out));
+    // The kernel's low-power, in Lenovo's word and in the one --mode takes.
+    QCOMPARE(status.value("text").toString(), QString("Quiet"));
+    QCOMPARE(status.value("alt").toString(), QString("quiet"));
+    QCOMPARE(status.value("class").toString(), QString("quiet"));
+    QCOMPARE(status.value("mode").toString(), QString("low-power"));
+    QVERIFY(status.value("tooltip").toString().contains("mode      low-power"));
+    QCOMPARE(status.value("charging").toString(), QString("Standard"));
+    QVERIFY(status.value("cpu").isDouble());
+    // An asleep GPU is not woken to be read.
+    QVERIFY(status.value("gpu").isNull());
+    QCOMPARE(status.value("fans").toArray().first().toObject().value("rpm").toInt(), 2200);
+    QCOMPARE(status.value("backlight").toInt(), 2);
   }
 
   void changesTheModeByName() {
