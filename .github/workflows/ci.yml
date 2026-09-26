@@ -1,0 +1,44 @@
+# Builds Cohort and runs the unit tests and the simulated user against the
+# fixture laptops, which need no Legion hardware. Qt 6.8 or newer comes from
+# the distribution, so the job runs in an Ubuntu 26.04 container rather than
+# on the runner's own, older system.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths-ignore: ["**.md", "assets/screenshots/**", "LICENSE", "NOTICE"]
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request replaces a run under way.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      LANG: C.UTF-8
+    steps:
+      # The build dependencies the README lists for Debian and Ubuntu.
+      - run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake ninja-build \
+            qt6-base-dev qt6-declarative-dev qt6-svg-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-shapes qml6-module-qtquick-templates qml6-module-qtquick-window
+      - uses: actions/checkout@v5
+      - name: Unit tests
+        run: ./scripts/test.sh
+      - name: Simulated user
+        run: |
+          build-tests/cohort-fixture "$RUNNER_TEMP/legion" legion
+          COHORT_SYS_ROOT="$RUNNER_TEMP/legion" COHORT_CONFIG_DIR="$RUNNER_TEMP/config" QT_QPA_PLATFORM=offscreen \
+            build-tests/cohort --ui-test "$RUNNER_TEMP/ui"

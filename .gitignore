@@ -58,6 +58,12 @@
 /packaging/fedora/*
 !/packaging/fedora/cohort.spec
 
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/*.yml
+
 # Never publish private state, credentials, build products, captures or
 # editor and assistant files, even inside an allowed directory.
 build*/
